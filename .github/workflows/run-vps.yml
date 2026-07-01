@@ -35,4 +35,4 @@ jobs:
           PASSWORD: ${{ secrets.PASSWORD }}
           PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
         run: |
-          xvfb-run -a python main.py
+          cd extend-vps-exp && xvfb-run -a python main.py

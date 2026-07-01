@@ -107,7 +107,7 @@ def continue_free_vps(page: Page):
 
 def main():
     fetch_kwargs = {
-        "headless": False,
+        "headless": True,
         "page_action": continue_free_vps,
         "solve_cloudflare": True,
         "network_idle": True,
