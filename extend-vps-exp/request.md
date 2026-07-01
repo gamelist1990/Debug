@@ -1,0 +1,6 @@
+curl_cffi
+playwright
+patchright
+msgspec
+browserforge
+scrapling

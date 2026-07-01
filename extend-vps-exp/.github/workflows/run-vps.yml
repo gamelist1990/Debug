@@ -1,0 +1,38 @@
+name: Run VPS Auto Renew
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'  # 毎日UTC 00:00
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "scrapling[fetchers]" playwright
+
+      - name: Install browsers (Playwright)
+        run: python -m playwright install --with-deps
+
+      - name: Install Scrapling browsers
+        run: scrapling install
+
+      - name: Run script
+        env:
+          EMAIL: ${{ secrets.EMAIL }}
+          PASSWORD: ${{ secrets.PASSWORD }}
+          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
+        run: |
+          xvfb-run -a python main.py
