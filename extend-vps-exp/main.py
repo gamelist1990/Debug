@@ -4,7 +4,7 @@ from getpass import getpass
 # .env loader追加
 def load_dotenv(path: str = ".env"):
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    env_path = os.path.join(base_dir, path)
+    env_path = path if os.path.isabs(path) else os.path.join(base_dir, path)
 
     if not os.path.exists(env_path):
         print(f"[DEBUG] .env not found: {env_path}")
@@ -42,10 +42,31 @@ def env_or_prompt(name: str, prompt: str, secret: bool = False) -> str:
     if value:
         return value
 
+    # In CI there is no interactive TTY, so missing env vars must fail fast.
+    if os.environ.get("CI"):
+        raise RuntimeError(f"Missing required environment variable: {name}")
+
     if secret:
         return getpass(prompt)
 
     return input(prompt)
+
+
+def wait_and_click_enabled(locator, timeout_ms: int = 60000, interval_ms: int = 500):
+    elapsed = 0
+    while elapsed < timeout_ms:
+        if locator.is_visible() and locator.is_enabled():
+            locator.click()
+            return
+        locator.page.wait_for_timeout(interval_ms)
+        elapsed += interval_ms
+
+    disabled_attr = locator.get_attribute("disabled")
+    aria_disabled_attr = locator.get_attribute("aria-disabled")
+    raise TimeoutError(
+        "Continue button did not become enabled "
+        f"within {timeout_ms}ms (disabled={disabled_attr}, aria-disabled={aria_disabled_attr})"
+    )
 
 
 def continue_free_vps(page: Page):
@@ -110,10 +131,14 @@ def continue_free_vps(page: Page):
         code = input("CAPTCHA: ").strip()
 
     log("fill captcha input")
-    page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
+    captcha_input = page.locator('[placeholder="上の画像の数字を入力"]')
+    captcha_input.fill(code)
+    # Some pages enable submit only after blur/input events are processed.
+    captcha_input.press("Tab")
 
     log("submit final continue button")
-    page.get_by_text("無料VPSの利用を継続する").click()
+    final_submit = page.get_by_role("button", name="無料VPSの利用を継続する").first
+    wait_and_click_enabled(final_submit)
 
     log("waiting final result")
 
@@ -122,8 +147,9 @@ def continue_free_vps(page: Page):
 
 
 def main():
+    is_ci = os.environ.get("CI") is not None
     fetch_kwargs = {
-        "headless": False,
+        "headless": is_ci,
         "page_action": continue_free_vps,
         "solve_cloudflare": True,
         "network_idle": True,
