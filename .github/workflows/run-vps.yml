@@ -29,10 +29,24 @@ jobs:
       - name: Install Scrapling browsers
         run: scrapling install
 
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Run script
         env:
           EMAIL: ${{ secrets.EMAIL }}
           PASSWORD: ${{ secrets.PASSWORD }}
           PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
+          HEADLESS: "1"
+          DEBUG_VIDEO: "1"
+          DEBUG_ARTIFACTS_DIR: ${{ github.workspace }}/extend-vps-exp/artifacts
         run: |
-          cd extend-vps-exp && xvfb-run -a python main.py
+          cd extend-vps-exp && python main.py
+
+      - name: Upload debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-debug-artifacts
+          path: extend-vps-exp/artifacts
+          if-no-files-found: ignore
