@@ -3,9 +3,17 @@ from getpass import getpass
 
 # .env loader追加
 def load_dotenv(path: str = ".env"):
-    if not os.path.exists(path):
+    # ファイル基準の絶対パスに変換
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    env_path = os.path.join(base_dir, path)
+
+    if not os.path.exists(env_path):
+        print(f"[DEBUG] .env not found: {env_path}")
         return
-    with open(path, encoding="utf-8") as f:
+
+    print(f"[DEBUG] loading .env from: {env_path}")
+
+    with open(env_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
@@ -14,8 +22,10 @@ def load_dotenv(path: str = ".env"):
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip())
 
-# 起動時に読み込み
-load_dotenv()
+# 起動時に読み込み（ファイル基準パスに修正）
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
 
 from scrapling.fetchers import StealthyFetcher
 from playwright.sync_api import Page
@@ -49,7 +59,7 @@ def continue_free_vps(page: Page):
     page.locator("#memberid").fill(email)
     page.locator("#user_password").fill(password)
     page.get_by_text("ログインする").click()
-    page.wait_for_load_state("networkidle")
+    
 
     try:
         note = page.locator(".noteBar--info")
@@ -62,15 +72,25 @@ def continue_free_vps(page: Page):
         log(f"noteBar check error: {e}")
 
 
-    page.locator('a[href^="/xapanel/xvps/server/detail?id="]').first.click()
-    page.wait_for_load_state("networkidle")
+    # メニューを開いてから契約情報をクリック（hidden対策）
+    menu = page.locator(".contract__menu").first
+    menu.hover()
+    menu.click()
+
+    page.get_by_role("link", name="契約情報").first.click()
 
     page.get_by_text("更新する").click()
-    page.wait_for_load_state("networkidle")
 
     page.get_by_text("引き続き無料VPSの利用を継続する").click()
-    page.wait_for_load_state("networkidle")
 
+    try:
+        suspended = page.locator(".newApp__suspended")
+        if suspended.count() > 0:
+            text = suspended.inner_text()
+            log(f"[EXIT] update not available yet -> {text.strip()}")
+            return
+    except Exception as e:
+        log(f"suspended check error: {e}")
 
     # CAPTCHA自動取得（main.mjs 相当）
     img_src = page.locator('img[src^="data:"]').get_attribute("src")
@@ -99,7 +119,6 @@ def continue_free_vps(page: Page):
     page.get_by_text("無料VPSの利用を継続する").click()
 
     log("waiting final result")
-    page.wait_for_load_state("networkidle")
 
     log("flow completed")
     print("更新操作を送信しました。ブラウザ上の結果を確認してください。")
@@ -107,7 +126,7 @@ def continue_free_vps(page: Page):
 
 def main():
     fetch_kwargs = {
-        "headless": True,
+        "headless": False,
         "page_action": continue_free_vps,
         "solve_cloudflare": True,
         "network_idle": True,
