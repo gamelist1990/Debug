@@ -3,7 +3,6 @@ from getpass import getpass
 
 # .env loader追加
 def load_dotenv(path: str = ".env"):
-    # ファイル基準の絶対パスに変換
     base_dir = os.path.dirname(os.path.abspath(__file__))
     env_path = os.path.join(base_dir, path)
 
@@ -72,7 +71,6 @@ def continue_free_vps(page: Page):
         log(f"noteBar check error: {e}")
 
 
-    # メニューを開いてから契約情報をクリック（hidden対策）
     menu = page.locator(".contract__menu").first
     menu.hover()
     menu.click()
@@ -92,7 +90,6 @@ def continue_free_vps(page: Page):
     except Exception as e:
         log(f"suspended check error: {e}")
 
-    # CAPTCHA自動取得（main.mjs 相当）
     img_src = page.locator('img[src^="data:"]').get_attribute("src")
 
     if img_src:
