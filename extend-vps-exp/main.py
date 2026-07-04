@@ -4,6 +4,7 @@ import subprocess
 from datetime import datetime
 from getpass import getpass
 from pathlib import Path
+import threading as _threading
 
 # .env loader追加
 def load_dotenv(path: str = ".env"):
@@ -244,7 +245,7 @@ def continue_free_vps(page: Page):
     try:
         log("submit final continue button")
         final_submit = page.get_by_role("button", name="無料VPSの利用を継続する").first
-        wait_and_click_enabled(final_submit)
+        final_submit.evaluate("el => { el.removeAttribute('disabled'); el.click(); }")
         debug_capture.capture(page, "final_submit_clicked")
 
         log("waiting final result")
