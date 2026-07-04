@@ -7,7 +7,7 @@ on:
 
 jobs:
   run:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
@@ -29,8 +29,8 @@ jobs:
       - name: Install Scrapling browsers
         run: scrapling install
 
-      - name: Install ffmpeg and Xvfb
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb
+      - name: Install ffmpeg
+        run: choco install ffmpeg -y
 
       - name: Run script
         env:
@@ -40,11 +40,9 @@ jobs:
           HEADLESS: "0"
           DEBUG_VIDEO: "1"
           DEBUG_ARTIFACTS_DIR: ${{ github.workspace }}/extend-vps-exp/artifacts
-          DISPLAY: ":99"
         run: |
-          Xvfb :99 -screen 0 1280x900x24 &
-          sleep 1
-          cd extend-vps-exp && python main.py
+          cd extend-vps-exp
+          python main.py
 
       - name: Upload debug artifacts
         if: always()
