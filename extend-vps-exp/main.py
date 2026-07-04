@@ -211,39 +211,39 @@ def continue_free_vps(page: Page):
     except Exception as e:
         log(f"suspended check error: {e}")
 
-    debug_capture.capture(page, "before_captcha")
-    img_src = page.locator('img[src^="data:"]').get_attribute("src")
+    for _attempt in range(3):
+        log(f"captcha attempt {_attempt + 1}/3")
+        debug_capture.capture(page, f"before_captcha_a{_attempt + 1}")
+        img_src = page.locator('img[src^="data:"]').get_attribute("src")
 
-    if img_src:
-        log("captcha found, sending to solver")
-        try:
-            req = Request(
-                "https://captcha-120546510085.asia-northeast1.run.app",
-                data=img_src.encode()
-            )
-            res = urlopen(req).read().decode().strip()
-            code = res
-            log(f"captcha solved: {code}")
-            debug_capture.capture(page, "captcha_solved")
-        except Exception as e:
-            log(f"captcha solve failed: {e}")
+        if img_src:
+            log("captcha found, sending to solver")
+            try:
+                req = Request(
+                    "https://captcha-120546510085.asia-northeast1.run.app",
+                    data=img_src.encode()
+                )
+                res = urlopen(req).read().decode().strip()
+                code = res
+                log(f"captcha solved: {code}")
+                debug_capture.capture(page, "captcha_solved")
+            except Exception as e:
+                log(f"captcha solve failed: {e}")
+                code = input("CAPTCHA: ").strip()
+        else:
+            log("captcha not found, fallback to manual")
             code = input("CAPTCHA: ").strip()
-    else:
-        log("captcha not found, fallback to manual")
-        code = input("CAPTCHA: ").strip()
 
-    log("fill captcha input")
-    captcha_input = page.locator('[placeholder="上の画像の数字を入力"]')
-    captcha_input.click()
-    captcha_input.fill("")
-    captcha_input.press_sequentially(code, delay=50)
-    debug_capture.capture(page, "captcha_typing")
-    captcha_input.press("Tab")
-    page.wait_for_timeout(1000)
-    debug_capture.capture(page, "captcha_filled")
+        log("fill captcha input")
+        captcha_input = page.locator('[placeholder="上の画像の数字を入力"]')
+        captcha_input.click()
+        captcha_input.fill("")
+        captcha_input.press_sequentially(code, delay=50)
+        debug_capture.capture(page, "captcha_typing")
+        captcha_input.press("Tab")
+        page.wait_for_timeout(1000)
+        debug_capture.capture(page, "captcha_filled")
 
-    try:
-        # Click the Cloudflare Turnstile checkbox inside its iframe.
         try:
             cf = page.frame_locator('iframe[src*="challenges.cloudflare.com"]').first
             cf.locator("[type='checkbox'],.ctp-checkbox-container,label").first.click()
@@ -260,16 +260,21 @@ def continue_free_vps(page: Page):
         wait_and_click_enabled(final_submit)
         debug_capture.capture(page, "final_submit_clicked")
 
-        log("waiting final result")
-        page.wait_for_timeout(1000)
-        debug_capture.capture(page, "result_1s")
-        page.wait_for_timeout(1000)
-        debug_capture.capture(page, "result_2s")
-        page.wait_for_timeout(1000)
-        debug_capture.capture(page, "result_3s")
-    finally:
-        debug_capture.capture(page, "final_state")
-        debug_capture.finalize()
+        page.wait_for_timeout(2000)
+        debug_capture.capture(page, f"result_a{_attempt + 1}")
+
+        if page.locator("text=認証に失敗しました").count() > 0:
+            log(f"captcha failed on attempt {_attempt + 1}, retrying")
+            debug_capture.capture(page, f"captcha_failed_a{_attempt + 1}")
+            continue
+
+        log("captcha succeeded")
+        break
+    else:
+        log("all captcha attempts exhausted")
+
+    debug_capture.capture(page, "final_state")
+    debug_capture.finalize()
 
     log("flow completed")
     print("更新操作を送信しました。ブラウザ上の結果を確認してください。")
