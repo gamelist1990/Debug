@@ -35,6 +35,7 @@ import re as _re
 from scrapling.fetchers import StealthyFetcher
 from playwright.sync_api import Page
 from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, build_opener
 import logging
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s")
@@ -227,7 +228,12 @@ def continue_free_vps(page: Page):
                     "https://captcha-120546510085.asia-northeast1.run.app",
                     data=img_src.encode()
                 )
-                res = urlopen(req).read().decode().strip()
+                _proxy_url = os.environ.get("PROXY_SERVER")
+                if _proxy_url:
+                    _opener = build_opener(ProxyHandler({"https": _proxy_url, "http": _proxy_url}))
+                    res = _opener.open(req).read().decode().strip()
+                else:
+                    res = urlopen(req).read().decode().strip()
                 code = res
                 log(f"captcha solved: {code}")
                 debug_capture.capture(page, "captcha_solved")
