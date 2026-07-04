@@ -175,30 +175,18 @@ def continue_free_vps(page: Page):
     debug_capture.start()
     debug_capture.capture(page, "after_login")
 
-    # Close the campaign modal by clicking its close button.
+    # Wait for the campaign modal to appear (it renders with a delay after login),
+    # then close it. If it doesn't appear within 5 s, skip.
     try:
+        page.wait_for_selector("#campaignModalForFreeUsers.isOpen", state="visible", timeout=5000)
+        log("campaign modal appeared, clicking close button")
         close_btn = page.locator("#campaignModalForFreeUsers button.modal__close")
-        if close_btn.count() > 0:
-            log("campaign modal found, clicking close button")
-            close_btn.click()
-            try:
-                page.wait_for_selector("#campaignModalForFreeUsers.isOpen", state="hidden", timeout=5000)
-            except Exception:
-                pass
-            log("campaign modal closed")
-            debug_capture.capture(page, "modal_dismissed")
-    except Exception as e:
-        log(f"campaign modal close error: {e}")
-        # Fallback: force-remove via JS
-        try:
-            page.evaluate(
-                "(function() {"
-                "  var m = document.querySelector('#campaignModalForFreeUsers');"
-                "  if (m) { m.classList.remove('isOpen'); m.style.display = 'none'; m.style.pointerEvents = 'none'; }"
-                "})()"
-            )
-        except Exception:
-            pass
+        close_btn.click()
+        page.wait_for_selector("#campaignModalForFreeUsers.isOpen", state="hidden", timeout=5000)
+        log("campaign modal closed")
+        debug_capture.capture(page, "modal_dismissed")
+    except Exception:
+        log("campaign modal did not appear or already closed")
 
     menu.hover()
     menu.click()
