@@ -229,6 +229,8 @@ def continue_free_vps(page: Page):
         if suspended.count() > 0:
             text = suspended.inner_text()
             log(f"[EXIT] update not available yet -> {text.strip()}")
+            _flow_result["succeeded"] = True
+            debug_capture.finalize()
             return
     except Exception as e:
         log(f"suspended check error: {e}")
