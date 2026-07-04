@@ -148,6 +148,8 @@ def wait_and_click_enabled(locator, timeout_ms: int = 60000, interval_ms: int = 
     )
 
 
+_flow_result: dict = {"succeeded": False}
+
 def continue_free_vps(page: Page):
     log("start flow")
     debug_capture = build_debug_capture()
@@ -303,6 +305,7 @@ def continue_free_vps(page: Page):
 
         log("auth succeeded")
         _succeeded = True
+        _flow_result["succeeded"] = True
         break
     else:
         log("all captcha attempts exhausted")
@@ -341,6 +344,11 @@ def main():
 
     StealthyFetcher.adaptive = True
     StealthyFetcher.fetch(LOGIN_URL, **fetch_kwargs)
+
+    if not _flow_result.get("succeeded"):
+        log("[FAIL] flow did not succeed")
+        import sys as _sys
+        _sys.exit(1)
 
 
 if __name__ == "__main__":
