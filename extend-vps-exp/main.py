@@ -211,6 +211,7 @@ def continue_free_vps(page: Page):
     except Exception as e:
         log(f"suspended check error: {e}")
 
+    debug_capture.capture(page, "before_captcha")
     img_src = page.locator('img[src^="data:"]').get_attribute("src")
 
     if img_src:
@@ -234,24 +235,40 @@ def continue_free_vps(page: Page):
     log("fill captcha input")
     captcha_input = page.locator('[placeholder="上の画像の数字を入力"]')
     captcha_input.click()
-    # Clear existing value first, then type character-by-character to trigger
-    # the page's Vue/React input event handlers and enable the submit button.
     captcha_input.fill("")
     captcha_input.press_sequentially(code, delay=50)
+    debug_capture.capture(page, "captcha_typing")
     captcha_input.press("Tab")
     page.wait_for_timeout(1000)
     debug_capture.capture(page, "captcha_filled")
 
     try:
+        # Click the Cloudflare Turnstile checkbox inside its iframe.
+        try:
+            cf = page.frame_locator('iframe[src*="challenges.cloudflare.com"]').first
+            cf.locator("[type='checkbox'],.ctp-checkbox-container,label").first.click()
+            log("cloudflare checkbox clicked, waiting for verification")
+            debug_capture.capture(page, "cloudflare_clicked")
+            page.wait_for_timeout(5000)
+            debug_capture.capture(page, "cloudflare_done")
+        except Exception as _cf_err:
+            log(f"cloudflare click error: {_cf_err}")
+
         log("submit final continue button")
         final_submit = page.get_by_role("button", name="無料VPSの利用を継続する").first
-        final_submit.evaluate("el => { el.removeAttribute('disabled'); el.click(); }")
+        debug_capture.capture(page, "before_submit")
+        wait_and_click_enabled(final_submit)
         debug_capture.capture(page, "final_submit_clicked")
 
         log("waiting final result")
-        page.wait_for_timeout(2000)
-        debug_capture.capture(page, "after_submit_wait")
+        page.wait_for_timeout(1000)
+        debug_capture.capture(page, "result_1s")
+        page.wait_for_timeout(1000)
+        debug_capture.capture(page, "result_2s")
+        page.wait_for_timeout(1000)
+        debug_capture.capture(page, "result_3s")
     finally:
+        debug_capture.capture(page, "final_state")
         debug_capture.finalize()
 
     log("flow completed")
