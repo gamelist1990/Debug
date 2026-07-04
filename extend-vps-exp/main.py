@@ -175,27 +175,33 @@ def continue_free_vps(page: Page):
     debug_capture.start()
     debug_capture.capture(page, "after_login")
 
-    # Unconditionally force-hide the campaign modal that intercepts pointer events.
-    # Using JS is necessary because Playwright's force=True on hover still fires but
-    # the JS evaluate runs in the browser and removes the overlay before the action.
+    # Close the campaign modal by clicking its close button.
     try:
-        page.evaluate(
-            "(function() {"
-            "  var m = document.querySelector('#campaignModalForFreeUsers');"
-            "  if (m) { m.classList.remove('isOpen'); m.style.display = 'none'; m.style.visibility = 'hidden'; m.style.pointerEvents = 'none'; }"
-            "  var overlays = document.querySelectorAll('.modal.isOpen');"
-            "  overlays.forEach(function(o) { o.classList.remove('isOpen'); o.style.display = 'none'; o.style.pointerEvents = 'none'; });"
-            "})()"
-        )
-        log("campaign modal force-hidden via JS")
-        page.wait_for_timeout(300)
-        debug_capture.capture(page, "modal_dismissed")
+        close_btn = page.locator("#campaignModalForFreeUsers button.modal__close")
+        if close_btn.count() > 0:
+            log("campaign modal found, clicking close button")
+            close_btn.click()
+            try:
+                page.wait_for_selector("#campaignModalForFreeUsers.isOpen", state="hidden", timeout=5000)
+            except Exception:
+                pass
+            log("campaign modal closed")
+            debug_capture.capture(page, "modal_dismissed")
     except Exception as e:
-        log(f"campaign modal dismiss error: {e}")
+        log(f"campaign modal close error: {e}")
+        # Fallback: force-remove via JS
+        try:
+            page.evaluate(
+                "(function() {"
+                "  var m = document.querySelector('#campaignModalForFreeUsers');"
+                "  if (m) { m.classList.remove('isOpen'); m.style.display = 'none'; m.style.pointerEvents = 'none'; }"
+                "})()"
+            )
+        except Exception:
+            pass
 
-    # force=True bypasses Playwright's interception check as a safety net.
-    menu.hover(force=True)
-    menu.click(force=True)
+    menu.hover()
+    menu.click()
     debug_capture.capture(page, "menu_opened")
 
     page.get_by_role("link", name="契約情報").first.click()
