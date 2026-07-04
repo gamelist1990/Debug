@@ -31,6 +31,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 
+import re as _re
 from scrapling.fetchers import StealthyFetcher
 from playwright.sync_api import Page
 from urllib.request import Request, urlopen
@@ -229,9 +230,15 @@ def continue_free_vps(page: Page):
                 debug_capture.capture(page, "captcha_solved")
             except Exception as e:
                 log(f"captcha solve failed: {e}")
+                if os.environ.get("CI"):
+                    log("CI: solver failed, skipping this attempt")
+                    continue
                 code = input("CAPTCHA: ").strip()
         else:
             log("captcha not found, fallback to manual")
+            if os.environ.get("CI"):
+                log("CI: no captcha image, skipping")
+                continue
             code = input("CAPTCHA: ").strip()
 
         log("fill captcha input")
@@ -244,13 +251,25 @@ def continue_free_vps(page: Page):
         page.wait_for_timeout(1000)
         debug_capture.capture(page, "captcha_filled")
 
+        # Use the same method as Scrapling's _cloudflare_solver:
+        # find the CF iframe by URL pattern and click via bounding box coordinates.
+        _CF_PAT = _re.compile(r"^https?://challenges\.cloudflare\.com/cdn-cgi/challenge-platform/.*")
         try:
-            cf = page.frame_locator('iframe[src*="challenges.cloudflare.com"]').first
-            cf.locator("[type='checkbox'],.ctp-checkbox-container,label").first.click()
-            log("cloudflare checkbox clicked, waiting for verification")
-            debug_capture.capture(page, "cloudflare_clicked")
-            page.wait_for_timeout(5000)
-            debug_capture.capture(page, "cloudflare_done")
+            cf_iframe = page.frame(url=_CF_PAT)
+            if cf_iframe is not None:
+                outer_box = cf_iframe.frame_element().bounding_box()
+                if outer_box:
+                    cx = outer_box["x"] + 27
+                    cy = outer_box["y"] + 26
+                    page.mouse.click(cx, cy, delay=150)
+                    log(f"cloudflare iframe clicked at ({cx:.0f},{cy:.0f}), waiting")
+                    debug_capture.capture(page, "cloudflare_clicked")
+                    page.wait_for_timeout(5000)
+                    debug_capture.capture(page, "cloudflare_done")
+                else:
+                    log("cloudflare iframe found but no bounding box")
+            else:
+                log("cloudflare iframe not found by URL pattern")
         except Exception as _cf_err:
             log(f"cloudflare click error: {_cf_err}")
 
@@ -263,12 +282,25 @@ def continue_free_vps(page: Page):
         page.wait_for_timeout(2000)
         debug_capture.capture(page, f"result_a{_attempt + 1}")
 
-        if page.locator("text=認証に失敗しました").count() > 0:
-            log(f"captcha failed on attempt {_attempt + 1}, retrying")
-            debug_capture.capture(page, f"captcha_failed_a{_attempt + 1}")
+        cf_failed = page.locator("text=認証に失敗しました").count() > 0
+        captcha_wrong = page.locator("text=入力された認証コードが正しくありません").count() > 0
+
+        if cf_failed:
+            log(f"Cloudflare auth failed on attempt {_attempt + 1}, retrying")
+            debug_capture.capture(page, f"cf_failed_a{_attempt + 1}")
+            page.wait_for_timeout(2000)
+            try:
+                page.wait_for_selector('img[src^="data:image"]', timeout=10000)
+            except Exception:
+                log("captcha image did not reload")
+            continue
+        elif captcha_wrong:
+            log(f"CAPTCHA code wrong on attempt {_attempt + 1}, retrying")
+            debug_capture.capture(page, f"captcha_wrong_a{_attempt + 1}")
+            page.wait_for_timeout(1000)
             continue
 
-        log("captcha succeeded")
+        log("auth succeeded")
         break
     else:
         log("all captcha attempts exhausted")
