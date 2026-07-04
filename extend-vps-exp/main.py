@@ -254,32 +254,12 @@ def continue_free_vps(page: Page):
         page.wait_for_timeout(1000)
         debug_capture.capture(page, "captcha_filled")
 
-        # Use the same method as Scrapling's _cloudflare_solver:
-        # find the CF iframe by URL pattern and click via bounding box coordinates.
-        _CF_PAT = _re.compile(r"^https?://challenges\.cloudflare\.com/cdn-cgi/challenge-platform/.*")
-        try:
-            cf_iframe = page.frame(url=_CF_PAT)
-            if cf_iframe is not None:
-                outer_box = cf_iframe.frame_element().bounding_box()
-                if outer_box:
-                    cx = outer_box["x"] + 27
-                    cy = outer_box["y"] + 26
-                    page.mouse.click(cx, cy, delay=150)
-                    log(f"cloudflare iframe clicked at ({cx:.0f},{cy:.0f}), waiting")
-                    debug_capture.capture(page, "cloudflare_clicked")
-                    page.wait_for_timeout(5000)
-                    debug_capture.capture(page, "cloudflare_done")
-                else:
-                    log("cloudflare iframe found but no bounding box")
-            else:
-                log("cloudflare iframe not found by URL pattern")
-        except Exception as _cf_err:
-            log(f"cloudflare click error: {_cf_err}")
-
-        log("submit final continue button")
-        final_submit = page.get_by_role("button", name="無料VPSの利用を継続する").first
+        # Wait for Cloudflare Turnstile to auto-verify and enable the button.
+        # Do NOT click CF iframe manually - it may be managed/invisible type.
+        log("waiting for submit button to become enabled (CF auto-verify)")
         debug_capture.capture(page, "before_submit")
-        wait_and_click_enabled(final_submit)
+        final_submit = page.get_by_role("button", name="無料VPSの利用を継続する").first
+        wait_and_click_enabled(final_submit, timeout_ms=30000)
         debug_capture.capture(page, "final_submit_clicked")
 
         page.wait_for_timeout(2000)
