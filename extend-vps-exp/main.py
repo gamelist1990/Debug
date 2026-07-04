@@ -175,25 +175,27 @@ def continue_free_vps(page: Page):
     debug_capture.start()
     debug_capture.capture(page, "after_login")
 
-    # Dismiss campaign modal (#campaignModalForFreeUsers) that intercepts pointer events.
+    # Unconditionally force-hide the campaign modal that intercepts pointer events.
+    # Using JS is necessary because Playwright's force=True on hover still fires but
+    # the JS evaluate runs in the browser and removes the overlay before the action.
     try:
-        campaign_modal = page.locator("#campaignModalForFreeUsers.isOpen")
-        if campaign_modal.count() > 0:
-            log("campaign modal detected, dismissing")
-            page.keyboard.press("Escape")
-            page.wait_for_timeout(500)
-            # Force-hide via JS if Escape did not close it.
-            page.evaluate(
-                "const m = document.querySelector('#campaignModalForFreeUsers');"
-                "if (m) { m.classList.remove('isOpen'); m.style.display = 'none'; }"
-            )
-            page.wait_for_timeout(300)
-            debug_capture.capture(page, "modal_dismissed")
+        page.evaluate(
+            "(function() {"
+            "  var m = document.querySelector('#campaignModalForFreeUsers');"
+            "  if (m) { m.classList.remove('isOpen'); m.style.display = 'none'; m.style.visibility = 'hidden'; m.style.pointerEvents = 'none'; }"
+            "  var overlays = document.querySelectorAll('.modal.isOpen');"
+            "  overlays.forEach(function(o) { o.classList.remove('isOpen'); o.style.display = 'none'; o.style.pointerEvents = 'none'; });"
+            "})()"
+        )
+        log("campaign modal force-hidden via JS")
+        page.wait_for_timeout(300)
+        debug_capture.capture(page, "modal_dismissed")
     except Exception as e:
         log(f"campaign modal dismiss error: {e}")
 
-    menu.hover()
-    menu.click()
+    # force=True bypasses Playwright's interception check as a safety net.
+    menu.hover(force=True)
+    menu.click(force=True)
     debug_capture.capture(page, "menu_opened")
 
     page.get_by_role("link", name="契約情報").first.click()
