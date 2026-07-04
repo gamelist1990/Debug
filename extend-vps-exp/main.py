@@ -212,6 +212,7 @@ def continue_free_vps(page: Page):
     except Exception as e:
         log(f"suspended check error: {e}")
 
+    _succeeded = False
     for _attempt in range(3):
         log(f"captcha attempt {_attempt + 1}/3")
         debug_capture.capture(page, f"before_captcha_a{_attempt + 1}")
@@ -301,12 +302,18 @@ def continue_free_vps(page: Page):
             continue
 
         log("auth succeeded")
+        _succeeded = True
         break
     else:
         log("all captcha attempts exhausted")
 
     debug_capture.capture(page, "final_state")
     debug_capture.finalize()
+
+    if not _succeeded:
+        log("[FAIL] all authentication attempts failed")
+        import sys as _sys
+        _sys.exit(1)
 
     log("flow completed")
     print("更新操作を送信しました。ブラウザ上の結果を確認してください。")
