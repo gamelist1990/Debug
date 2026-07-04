@@ -220,8 +220,12 @@ def continue_free_vps(page: Page):
     log("fill captcha input")
     captcha_input = page.locator('[placeholder="上の画像の数字を入力"]')
     captcha_input.fill(code)
-    # Some pages enable submit only after blur/input events are processed.
+    # Trigger validation events so the page JS re-evaluates the button state.
+    captcha_input.dispatch_event("input")
+    captcha_input.dispatch_event("change")
     captcha_input.press("Tab")
+    # Wait for the page JS to finish validating the CAPTCHA and enable the button.
+    page.wait_for_timeout(3000)
     debug_capture.capture(page, "captcha_filled")
 
     try:
