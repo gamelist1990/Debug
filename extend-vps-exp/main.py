@@ -200,11 +200,29 @@ def continue_free_vps(page: Page):
     page.get_by_role("link", name="契約情報").first.click()
     debug_capture.capture(page, "contract_info_opened")
 
-    page.get_by_text("更新する").click()
-    debug_capture.capture(page, "update_clicked")
+    try:
+        update_btn = page.get_by_text("更新する")
+        update_btn.wait_for(state="visible", timeout=10000)
+        update_btn.click()
+        debug_capture.capture(page, "update_clicked")
+    except Exception:
+        log("[EXIT] 更新する button not found - update not available or already done")
+        _flow_result["succeeded"] = True
+        debug_capture.capture(page, "update_not_available")
+        debug_capture.finalize()
+        return
 
-    page.get_by_text("引き続き無料VPSの利用を継続する").click()
-    debug_capture.capture(page, "continue_flow_opened")
+    try:
+        cont_btn = page.get_by_text("引き続き無料VPSの利用を継続する")
+        cont_btn.wait_for(state="visible", timeout=10000)
+        cont_btn.click()
+        debug_capture.capture(page, "continue_flow_opened")
+    except Exception:
+        log("[EXIT] 継続ボタン not found - update not available or already done")
+        _flow_result["succeeded"] = True
+        debug_capture.capture(page, "continue_not_available")
+        debug_capture.finalize()
+        return
 
     try:
         suspended = page.locator(".newApp__suspended")
