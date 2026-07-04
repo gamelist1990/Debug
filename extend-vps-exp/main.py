@@ -311,9 +311,7 @@ def continue_free_vps(page: Page):
     debug_capture.finalize()
 
     if not _succeeded:
-        log("[FAIL] all authentication attempts failed")
-        import sys as _sys
-        _sys.exit(1)
+        raise RuntimeError("[FAIL] all authentication attempts failed")
 
     log("flow completed")
     print("更新操作を送信しました。ブラウザ上の結果を確認してください。")
