@@ -175,6 +175,23 @@ def continue_free_vps(page: Page):
     debug_capture.start()
     debug_capture.capture(page, "after_login")
 
+    # Dismiss campaign modal (#campaignModalForFreeUsers) that intercepts pointer events.
+    try:
+        campaign_modal = page.locator("#campaignModalForFreeUsers.isOpen")
+        if campaign_modal.count() > 0:
+            log("campaign modal detected, dismissing")
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(500)
+            # Force-hide via JS if Escape did not close it.
+            page.evaluate(
+                "const m = document.querySelector('#campaignModalForFreeUsers');"
+                "if (m) { m.classList.remove('isOpen'); m.style.display = 'none'; }"
+            )
+            page.wait_for_timeout(300)
+            debug_capture.capture(page, "modal_dismissed")
+    except Exception as e:
+        log(f"campaign modal dismiss error: {e}")
+
     menu.hover()
     menu.click()
     debug_capture.capture(page, "menu_opened")
