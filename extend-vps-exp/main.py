@@ -219,13 +219,13 @@ def continue_free_vps(page: Page):
 
     log("fill captcha input")
     captcha_input = page.locator('[placeholder="上の画像の数字を入力"]')
-    captcha_input.fill(code)
-    # Trigger validation events so the page JS re-evaluates the button state.
-    captcha_input.dispatch_event("input")
-    captcha_input.dispatch_event("change")
+    captcha_input.click()
+    # Clear existing value first, then type character-by-character to trigger
+    # the page's Vue/React input event handlers and enable the submit button.
+    captcha_input.fill("")
+    captcha_input.press_sequentially(code, delay=50)
     captcha_input.press("Tab")
-    # Wait for the page JS to finish validating the CAPTCHA and enable the button.
-    page.wait_for_timeout(3000)
+    page.wait_for_timeout(1000)
     debug_capture.capture(page, "captcha_filled")
 
     try:
