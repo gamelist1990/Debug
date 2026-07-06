@@ -204,6 +204,61 @@ def _read_turnstile_token(page) -> str:
         return ""
 
 
+def _find_turnstile_iframe(page):
+    """Turnstile ウィジェットの iframe を返す。無ければ None。
+
+    Cloudflare Turnstile は必ず https://challenges.cloudflare.com/... を src にする
+    iframe を挿入する。それが可視かつ bounding box を持っていれば「チェックボックス」
+    表示中とみなせる。
+    """
+    try:
+        return page.query_selector("iframe[src*='challenges.cloudflare.com']")
+    except Exception:
+        return None
+
+
+def _try_click_turnstile(page, name: str) -> bool:
+    """Turnstile のチェックボックスが表示されていたらクリックしてみる。
+
+    Turnstile の checkbox は iframe の中にあり、通常 iframe の左端から
+    ~27px, 上端から ~28px の位置に描画される。CloakBrowser の humanize
+    と組み合わせて自然な mouse move で該当ピクセルをクリックすることで、
+    Managed Challenge を通す試み。
+
+    戻り値: True = クリックした, False = 該当 iframe が無かった or 例外
+    """
+    try:
+        el = _find_turnstile_iframe(page)
+        if not el:
+            return False
+        box = el.bounding_box()
+        if not box or box.get("width", 0) < 20:
+            return False
+        # scroll into view first
+        try:
+            el.scroll_into_view_if_needed(timeout=3000)
+            time.sleep(0.3)
+            box = el.bounding_box() or box
+        except Exception:
+            pass
+        # クリック目標: iframe 左上から (27, 28) 付近
+        target_x = box["x"] + 27
+        target_y = box["y"] + 28
+        p(f"[{name}] Turnstile checkbox detected at ~({target_x:.0f}, {target_y:.0f}) - clicking")
+        # humanize が careful preset なら Bezier で自然に動く
+        page.mouse.move(target_x - 60, target_y - 20, steps=15)
+        time.sleep(0.2)
+        page.mouse.move(target_x, target_y, steps=10)
+        time.sleep(0.15)
+        page.mouse.down()
+        time.sleep(0.08)
+        page.mouse.up()
+        return True
+    except Exception as e:
+        p(f"[{name}] click attempt exception: {e}")
+        return False
+
+
 def _run_turnstile_demo(page, name: str, url: str, extra_pass_words: list[str]) -> bool:
     """1 つの Turnstile デモサイトをテストして PASS/FAIL を返す。
 
@@ -232,14 +287,26 @@ def _run_turnstile_demo(page, name: str, url: str, extra_pass_words: list[str]) 
         p(f"[{name}] goto failed: {e}", ok=False)
         return False
 
-    # 最大 15s (500ms * 30) 待って token を polling
-    # ※ 20s * 8 サイト = 3 分弱と長いので詰めた
+    # フェーズ1: まず 5s 待って auto (non-interactive) で通るか確認
+    # フェーズ2: 通らなかったら Turnstile checkbox の存在確認 → クリック試行
+    # フェーズ3: クリック後さらに 10s 待って token を polling
     token = ""
-    for _ in range(30):
+    clicked = False
+    # フェーズ1
+    for _ in range(10):  # 5s
         time.sleep(0.5)
         token = _read_turnstile_token(page)
         if token:
             break
+    # フェーズ2 + 3
+    if not token:
+        clicked = _try_click_turnstile(page, name)
+        if clicked:
+            for _ in range(20):  # +10s
+                time.sleep(0.5)
+                token = _read_turnstile_token(page)
+                if token:
+                    break
 
     # 判定材料を集める
     try:
@@ -254,7 +321,7 @@ def _run_turnstile_demo(page, name: str, url: str, extra_pass_words: list[str]) 
 
     p(f"[{name}] title={title!r}")
     p(f"[{name}] body head={body[:120]!r}")
-    p(f"[{name}] token_len={len(token)}")
+    p(f"[{name}] token_len={len(token)} clicked={clicked}")
 
     # 1) 壁ワード検出 → FAIL
     stuck_hit = next((s for s in _STUCK_SIGNALS if s in combined), None)
