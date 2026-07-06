@@ -410,20 +410,13 @@ do_run() {
   # shellcheck disable=SC1091
   source "$VENV/bin/activate"
 
-  # ---- Xvfb ----
-  export DISPLAY="${DISPLAY:-:99}"
-  if ! pgrep -f "Xvfb ${DISPLAY}" >/dev/null 2>&1; then
-    log "Starting Xvfb on ${DISPLAY}"
-    Xvfb "$DISPLAY" -screen 0 1920x1080x24 -ac -nolisten tcp >/tmp/xvfb.log 2>&1 &
-    sleep 2
-  else
-    log "Xvfb already running on ${DISPLAY}"
-  fi
-
-  # ---- Mouse warm-up (helps CF Turnstile behavioral checks) ----
-  xdotool mousemove 640 400 >/dev/null 2>&1 || true
-  sleep 1
-  xdotool mousemove 800 500 >/dev/null 2>&1 || true
+  # ---- No Xvfb ----
+  # Xvfb-based CF Turnstile was always issuing challenge tokens (0-second
+  # response) that failed server-side siteverify. Confirmed on both
+  # GitHub Actions and this VPS. So we no longer start Xvfb; we let
+  # Playwright run Chromium in true headless mode (--headless=new)
+  # which produces a different fingerprint.
+  unset DISPLAY
 
   # ---- CAPTCHA model path ----
   local MODEL_PATH="$INSTALL_DIR/xserver_captcha.keras"
@@ -432,7 +425,9 @@ do_run() {
   fi
 
   # ---- Runtime env ----
-  export HEADLESS=0
+  # HEADLESS=1 tells main.py to launch Chromium in headless mode
+  # (no X server required).
+  export HEADLESS=1
   export DEBUG_VIDEO="${DEBUG_VIDEO:-0}"
   export TF_CPP_MIN_LOG_LEVEL=2
   # Preserve Chromium profile between runs so CF learns to trust us.
