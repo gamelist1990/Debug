@@ -280,24 +280,68 @@ def continue_free_vps(page: Page):
         page.wait_for_timeout(1000)
         debug_capture.capture(page, "captcha_filled")
 
-        # Click CF Turnstile iframe using same method as Scrapling's _cloudflare_solver.
+        # Click CF Turnstile with human-like mouse movement + token-based success check.
+        # Rationale: pure (x+27, y+26) one-shot click under Xvfb triggers CF bot detection.
+        # We now: (1) wait for iframe, (2) warm up the pointer with staged moves,
+        # (3) move -> mouseDown -> mouseUp on the checkbox, (4) poll cf-turnstile-response token.
         _CF_PAT = _re.compile(r"^https?://challenges\.cloudflare\.com/cdn-cgi/challenge-platform/.*")
+
+        def _human_move(_page, _x, _y, _steps=20):
+            _page.mouse.move(_x, _y, steps=_steps)
+            _page.wait_for_timeout(120)
+
         try:
-            cf_iframe = page.frame(url=_CF_PAT)
-            if cf_iframe is not None:
-                outer_box = cf_iframe.frame_element().bounding_box()
-                if outer_box:
-                    cx = outer_box["x"] + 27
-                    cy = outer_box["y"] + 26
-                    page.mouse.click(cx, cy, delay=150)
-                    log(f"cloudflare iframe clicked at ({cx:.0f},{cy:.0f}), waiting")
+            # Wait for the outer CF iframe to attach (up to ~10s).
+            outer_frame_el = None
+            for _ in range(20):
+                cf_iframe = page.frame(url=_CF_PAT)
+                if cf_iframe is not None:
+                    try:
+                        outer_frame_el = cf_iframe.frame_element()
+                        if outer_frame_el is not None:
+                            break
+                    except Exception:
+                        pass
+                page.wait_for_timeout(500)
+
+            if outer_frame_el is None:
+                log("cloudflare iframe not found")
+            else:
+                # Warm up the mouse: two staged moves from an arbitrary point.
+                vp = page.viewport_size or {"width": 1280, "height": 900}
+                _human_move(page, max(50, vp["width"] // 3), max(50, vp["height"] // 3), _steps=15)
+
+                box = outer_frame_el.bounding_box()
+                if box:
+                    # Turnstile checkbox sits near the left-center of the iframe.
+                    target_x = box["x"] + 30
+                    target_y = box["y"] + box["height"] / 2
+                    # Approach diagonally, then land on the target.
+                    _human_move(page, target_x - 60, target_y - 20, _steps=18)
+                    _human_move(page, target_x, target_y, _steps=16)
+                    page.mouse.down()
+                    page.wait_for_timeout(90)
+                    page.mouse.up()
+                    log(f"cloudflare clicked at ({target_x:.0f},{target_y:.0f})")
                     debug_capture.capture(page, "cloudflare_clicked")
-                    page.wait_for_timeout(5000)
-                    debug_capture.capture(page, "cloudflare_done")
+
+                    # Poll for token presence (cf-turnstile-response) up to ~15s.
+                    token_ok = False
+                    for _ in range(30):
+                        try:
+                            token = page.evaluate(
+                                "() => document.querySelector('input[name=\"cf-turnstile-response\"]')?.value || ''"
+                            )
+                            if token and len(token) > 20:
+                                token_ok = True
+                                break
+                        except Exception:
+                            pass
+                        page.wait_for_timeout(500)
+                    log(f"cloudflare token acquired: {token_ok}")
+                    debug_capture.capture(page, "cloudflare_done" if token_ok else "cloudflare_wait_timeout")
                 else:
                     log("cloudflare iframe bounding box not available")
-            else:
-                log("cloudflare iframe not found")
         except Exception as _cf_err:
             log(f"cloudflare click error: {_cf_err}")
 
