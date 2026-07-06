@@ -112,7 +112,7 @@ install_system_packages() {
   # These are the non-python packages we always need, and will succeed on any
   # supported Debian/Ubuntu release.
   local base_pkgs=(git python3 python3-pip python3-venv python3-dev build-essential \
-                   xvfb xdotool ffmpeg curl ca-certificates software-properties-common)
+                   xvfb xdotool ffmpeg curl ca-certificates software-properties-common unzip)
   # python3.12 is required as a fallback runtime because TensorFlow does not
   # ship wheels for Python 3.13+. On older Ubuntu (22.04/24.04) it's in main.
   # On very new Ubuntu (26.04 "resolute") it needs deadsnakes PPA, and if
@@ -370,6 +370,40 @@ do_install() {
   # Scrapling's optional stealth browser bundle.
   scrapling install >/dev/null 2>&1 || true
 
+  # ---- 5b. NopeCHA CAPTCHA solver extension (unpacked, for Chromium) ----
+  # Chrome Web Store CRX files can't be loaded by Playwright's Chromium
+  # directly (they need to be unpacked). We download the CRX with a fake
+  # Chrome UA, then unzip it into $INSTALL_DIR/nopecha-ext so the browser
+  # can load it via --load-extension.
+  local NOPECHA_ID="dknlfmjaanfblgfdfebhijalfmhmjjjo"
+  local NOPECHA_DIR="$INSTALL_DIR/nopecha-ext"
+  if [ ! -f "$NOPECHA_DIR/manifest.json" ]; then
+    log "Downloading NopeCHA extension (id=$NOPECHA_ID)..."
+    local crx_tmp="/tmp/nopecha.crx"
+    local crx_url="https://clients2.google.com/service/update2/crx?response=redirect&os=linux&arch=x64&os_arch=x86_64&nacl_arch=x86-64&prod=chromiumcrx&prodchannel=unknown&prodversion=120.0.6099.71&acceptformat=crx2,crx3&x=id%3D${NOPECHA_ID}%26uc"
+    if curl -fsSL -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.71 Safari/537.36" \
+         -o "$crx_tmp" "$crx_url"; then
+      rm -rf "$NOPECHA_DIR"
+      mkdir -p "$NOPECHA_DIR"
+      # A CRX file has a small header before the ZIP payload. `unzip` is
+      # tolerant of the extra prefix and will extract the archive anyway.
+      if unzip -qq -o "$crx_tmp" -d "$NOPECHA_DIR" 2>/tmp/nopecha-unzip.err; then
+        if [ -f "$NOPECHA_DIR/manifest.json" ]; then
+          log "NopeCHA extension installed at $NOPECHA_DIR"
+        else
+          warn "NopeCHA archive extracted but manifest.json missing"
+        fi
+      else
+        warn "unzip failed for NopeCHA CRX: $(tail -n 2 /tmp/nopecha-unzip.err)"
+      fi
+      rm -f "$crx_tmp"
+    else
+      warn "Failed to download NopeCHA CRX from Chrome Web Store"
+    fi
+  else
+    log "NopeCHA extension already present at $NOPECHA_DIR"
+  fi
+
   # ---- 6. .env template ----
   if [ ! -f "$APP_DIR/.env" ]; then
     cat > "$APP_DIR/.env" <<'EOF'
@@ -414,13 +448,16 @@ do_run() {
   # shellcheck disable=SC1091
   source "$VENV/bin/activate"
 
-  # ---- No Xvfb ----
-  # Xvfb-based CF Turnstile was always issuing challenge tokens (0-second
-  # response) that failed server-side siteverify. Confirmed on both
-  # GitHub Actions and this VPS. So we no longer start Xvfb; we let
-  # Playwright run Chromium in true headless mode (--headless=new)
-  # which produces a different fingerprint.
-  unset DISPLAY
+  # ---- Xvfb (required for NopeCHA extension) ----
+  # Chromium loads extensions only in headful mode. On a headless VPS we
+  # provide a virtual display via Xvfb :99 so Playwright can run Chromium
+  # with --load-extension=<NopeCHA>.
+  if ! pgrep -f "Xvfb :99" >/dev/null 2>&1; then
+    log "Starting Xvfb on :99"
+    Xvfb :99 -screen 0 1280x900x24 -ac >/tmp/xvfb.log 2>&1 &
+    sleep 1
+  fi
+  export DISPLAY=:99
 
   # ---- CAPTCHA model path ----
   local MODEL_PATH="$INSTALL_DIR/xserver_captcha.keras"
@@ -429,11 +466,19 @@ do_run() {
   fi
 
   # ---- Runtime env ----
-  # HEADLESS=1 tells main.py to launch Chromium in headless mode
-  # (no X server required).
-  export HEADLESS=1
+  # HEADLESS=0: the NopeCHA browser extension needs headful Chromium.
+  # Xvfb (above) provides the virtual display so no physical monitor
+  # is required.
+  export HEADLESS=0
   export DEBUG_VIDEO="${DEBUG_VIDEO:-0}"
   export TF_CPP_MIN_LOG_LEVEL=2
+  # Path to the unpacked NopeCHA extension (populated during install).
+  if [ -d "$INSTALL_DIR/nopecha-ext" ] && [ -f "$INSTALL_DIR/nopecha-ext/manifest.json" ]; then
+    export NOPECHA_EXTENSION_PATH="$INSTALL_DIR/nopecha-ext"
+    log "NopeCHA extension enabled: $NOPECHA_EXTENSION_PATH"
+  else
+    warn "NopeCHA extension not found; main.py will fall back to internal solvers"
+  fi
   # Preserve Chromium profile between runs so CF learns to trust us.
   # (Scrapling/patchright honours this by default via user_data_dir.)
   export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}"
@@ -452,10 +497,11 @@ do_run() {
   # Scrapling+Playwright runner (main.py) is kept as a fallback but is known
   # to fail on headless VPS due to CF challenge tokens being rejected
   # server-side.
-  #   RUNNER=scrapfly (default) -> scrapfly_main.py
-  #   RUNNER=legacy            -> main.py
-  local RUNNER="${RUNNER:-scrapfly}"
-  local script="scrapfly_main.py"
+  #   RUNNER=legacy (default) -> main.py  (uses Scrapling StealthyFetcher
+  #                                       + NopeCHA browser extension)
+  #   RUNNER=scrapfly        -> scrapfly_main.py
+  local RUNNER="${RUNNER:-legacy}"
+  local script="main.py"
   case "$RUNNER" in
     scrapfly) script="scrapfly_main.py" ;;
     legacy)   script="main.py" ;;

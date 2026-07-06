@@ -45,6 +45,14 @@ LOGIN_URL = "https://secure.xserver.ne.jp/xapanel/login/xvps/"
 
 
 class DebugCapture:
+    # Live-frame settings (always on; independent of DEBUG_VIDEO).
+    # A background thread overwrites frames/live.png every LIVE_INTERVAL_S
+    # seconds so operators can watch progress in real time.
+    LIVE_INTERVAL_S = 0.5
+    # Always-on frames dir, next to this script.
+    LIVE_DIR = Path(BASE_DIR) / "frames"
+    LIVE_PATH = LIVE_DIR / "live.png"
+
     def __init__(self, enabled: bool, output_dir: Path):
         self.enabled = enabled
         self.output_dir = output_dir
@@ -53,8 +61,70 @@ class DebugCapture:
         self.video_path = output_dir / "debug.mp4"
         self.frame_index = 0
         self.started = False
+        # Live-frame worker state (always on).
+        self._live_page: Page | None = None
+        self._live_stop = _threading.Event()
+        self._live_thread: _threading.Thread | None = None
 
-    def start(self):
+    # ---- Live-frame worker (always on) ----
+    def start_live(self, page: Page):
+        """Start the always-on background live screenshot thread.
+
+        Overwrites the same file (frames/live.png) every 0.5s so it can be
+        tail-viewed (e.g. via a file watcher or `feh --reload`).
+        """
+        if self._live_thread is not None:
+            return
+        try:
+            self.LIVE_DIR.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        self._live_page = page
+        self._live_stop.clear()
+        self._live_thread = _threading.Thread(
+            target=self._live_loop, name="live-capture", daemon=True
+        )
+        self._live_thread.start()
+
+    def _live_loop(self):
+        # Playwright's sync API is not strictly thread-safe, but page.screenshot
+        # via CDP tends to survive concurrent calls. Any error is swallowed so
+        # the main flow keeps running.
+        tmp_path = self.LIVE_DIR / "live.png.tmp"
+        while not self._live_stop.is_set():
+            try:
+                pg = self._live_page
+                if pg is not None:
+                    # Write to a temp path then rename, so readers never see a
+                    # half-written file.
+                    pg.screenshot(path=str(tmp_path), full_page=False)
+                    try:
+                        os.replace(str(tmp_path), str(self.LIVE_PATH))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            # Wait the interval (interruptible).
+            if self._live_stop.wait(self.LIVE_INTERVAL_S):
+                break
+
+    def stop_live(self):
+        self._live_stop.set()
+        t = self._live_thread
+        if t is not None:
+            try:
+                t.join(timeout=2)
+            except Exception:
+                pass
+            self._live_thread = None
+        self._live_page = None
+
+    # ---- Indexed capture (existing behaviour, gated by DEBUG_VIDEO) ----
+    def start(self, page: Page | None = None):
+        # Always start the live-frame thread when a page is provided.
+        if page is not None:
+            self.start_live(page)
+
         if not self.enabled or self.started:
             return
         self.frames_dir.mkdir(parents=True, exist_ok=True)
@@ -76,6 +146,8 @@ class DebugCapture:
         self._log_event(f"frame={self.frame_index:05d} label={label} path={frame_path.name}")
 
     def finalize(self):
+        # Always stop the live-frame thread on flow exit.
+        self.stop_live()
         if not self.enabled or not self.started:
             return
 
@@ -177,7 +249,9 @@ def continue_free_vps(page: Page):
 
     menu = page.locator(".contract__menu").first
     # Capture starts only after login screen to avoid credential leakage in artifacts.
-    debug_capture.start()
+    # Passing the page also kicks off the always-on live-frame thread
+    # (frames/live.png overwritten every 0.5s).
+    debug_capture.start(page)
     debug_capture.capture(page, "after_login")
 
     # Wait for the campaign modal to appear (it renders with a delay after login),
@@ -235,16 +309,14 @@ def continue_free_vps(page: Page):
     except Exception as e:
         log(f"suspended check error: {e}")
 
-    # ML-based CAPTCHA solving is ~90% accurate at best (this matches the
-    # reference upstream at GitHub30/captcha-cloudrun). If attempt 1 is
-    # rejected, the site navigates to an error page from which we cannot
-    # cleanly recover (POST-navigation go_back fails with ERR_CACHE_MISS,
-    # and re-entering the flow times out). Rather than fighting the retry
-    # infrastructure, we accept one shot and let tomorrow's schedule retry.
-    # In CI we do a single attempt; interactive runs still get 3 attempts.
+    # Single-attempt flow:
+    #   - CAPTCHA image number: solved by the local Keras model (offline).
+    #   - Cloudflare Turnstile: handled by the NopeCHA browser extension
+    #     loaded via --load-extension (see main()).
+    # No retries: if this attempt fails, tomorrow's cron will retry.
     _succeeded = False
     _prev_img_src = None
-    _max_attempts = 1 if os.environ.get("CI") else 3
+    _max_attempts = 1
     for _attempt in range(_max_attempts):
         log(f"captcha attempt {_attempt + 1}/3")
         debug_capture.capture(page, f"before_captcha_a{_attempt + 1}")
@@ -282,11 +354,11 @@ def continue_free_vps(page: Page):
                 img_src = _cand
 
         if img_src:
-            log(f"captcha found (len={len(img_src)}, head={img_src[:40]!r}), trying local model first")
+            log(f"captcha found (len={len(img_src)}), solving locally")
             _prev_img_src = img_src
             code = None
 
-            # 1) Local Keras model (offline, no external dependency).
+            # Local Keras model only (offline, no remote fallback).
             try:
                 from captcha_solver import solve as _local_solve
                 _local = _local_solve(img_src)
@@ -295,45 +367,20 @@ def continue_free_vps(page: Page):
                     log(f"captcha solved locally: {code}")
                     debug_capture.capture(page, "captcha_solved_local")
                 else:
-                    log("local solver returned empty, falling back to remote")
+                    log("local solver returned empty")
             except Exception as _le:
                 log(f"local solver unavailable: {_le}")
 
-            # 2) Remote solver fallback (with retries) if local failed.
-            if code is None:
-                _proxy_url = os.environ.get("PROXY_SERVER")
-                import time as _time
-                for _solver_try in range(4):
-                    try:
-                        req = Request(
-                            "https://captcha-120546510085.asia-northeast1.run.app",
-                            data=img_src.encode()
-                        )
-                        if _proxy_url:
-                            _opener = build_opener(ProxyHandler({"https": _proxy_url, "http": _proxy_url}))
-                            res = _opener.open(req, timeout=20).read().decode().strip()
-                        else:
-                            res = urlopen(req, timeout=20).read().decode().strip()
-                        if res:
-                            code = res
-                            log(f"captcha solved remotely: {code}")
-                            debug_capture.capture(page, "captcha_solved_remote")
-                            break
-                        log(f"remote solver returned empty (try {_solver_try + 1}/4)")
-                    except Exception as e:
-                        log(f"remote solve try {_solver_try + 1}/4 failed: {e}")
-                    _time.sleep(1 + _solver_try * 2)  # 1s, 3s, 5s, 7s
-
             if code is None:
                 if os.environ.get("CI"):
-                    log("CI: both solvers failed, skipping this attempt")
-                    continue
+                    log("CI: local solver failed, aborting attempt")
+                    break
                 code = input("CAPTCHA: ").strip()
         else:
             log("captcha not found, fallback to manual")
             if os.environ.get("CI"):
-                log("CI: no captcha image, skipping")
-                continue
+                log("CI: no captcha image, aborting attempt")
+                break
             code = input("CAPTCHA: ").strip()
 
         log("fill captcha input")
@@ -346,157 +393,38 @@ def continue_free_vps(page: Page):
         page.wait_for_timeout(1000)
         debug_capture.capture(page, "captcha_filled")
 
-        # Click CF Turnstile with human-like mouse movement + token-based success check.
-        # Rationale: pure (x+27, y+26) one-shot click under Xvfb triggers CF bot detection.
-        # We now: (1) wait for iframe, (2) warm up the pointer with staged moves,
-        # (3) move -> mouseDown -> mouseUp on the checkbox, (4) poll cf-turnstile-response token.
-        _CF_PAT = _re.compile(r"^https?://challenges\.cloudflare\.com/cdn-cgi/challenge-platform/.*")
+        # Cloudflare Turnstile: handled entirely by the NopeCHA browser
+        # extension (loaded via --load-extension in main()).
+        # We just wait for the extension to fill the cf-turnstile-response
+        # hidden input, then continue.
+        log("waiting for NopeCHA to solve Cloudflare Turnstile...")
+        debug_capture.capture(page, "cloudflare_waiting")
 
-        def _human_move(_page, _x, _y, _steps=20):
-            _page.mouse.move(_x, _y, steps=_steps)
-            _page.wait_for_timeout(120)
+        def _read_token():
+            try:
+                return page.evaluate(
+                    "() => { const els = document.querySelectorAll('input[name=\"cf-turnstile-response\"]');"
+                    "  for (const e of els) { if (e.value && e.value.length > 20) return e.value; } return ''; }"
+                ) or ""
+            except Exception:
+                return ""
 
-        import random as _random
-        try:
-            # Wait for the outer CF iframe to attach (up to ~15s).
-            outer_frame_el = None
-            cf_iframe = None
-            for _ in range(30):
-                cf_iframe = page.frame(url=_CF_PAT)
-                if cf_iframe is not None:
-                    try:
-                        outer_frame_el = cf_iframe.frame_element()
-                        if outer_frame_el is not None:
-                            break
-                    except Exception:
-                        pass
-                page.wait_for_timeout(500)
+        token_ok = False
+        # Give NopeCHA up to ~60s to click Turnstile and populate the token.
+        for _ in range(120):
+            if len(_read_token()) > 20:
+                token_ok = True
+                break
+            page.wait_for_timeout(500)
 
-            if outer_frame_el is None:
-                log("cloudflare iframe not found")
-            else:
-                # Scroll the widget into view first (mimics user reading the form).
-                try:
-                    outer_frame_el.scroll_into_view_if_needed()
-                    page.wait_for_timeout(300)
-                except Exception:
-                    pass
-
-                # Warm up the mouse with random jitter from arbitrary start point.
-                vp = page.viewport_size or {"width": 1280, "height": 900}
-                _sx = _random.randint(80, max(120, vp["width"] // 2))
-                _sy = _random.randint(80, max(120, vp["height"] // 3))
-                _human_move(page, _sx, _sy, _steps=12)
-                _human_move(page, _sx + _random.randint(-40, 40), _sy + _random.randint(-30, 30), _steps=8)
-
-                box = outer_frame_el.bounding_box()
-                if box:
-                    # Turnstile checkbox sits ~27px right, ~28px down inside the widget.
-                    target_x = box["x"] + 27 + _random.uniform(-2, 2)
-                    target_y = box["y"] + 28 + _random.uniform(-2, 2)
-                    # Diagonal approach with two waypoints.
-                    _human_move(page, target_x - 80, target_y - 30, _steps=20)
-                    page.wait_for_timeout(_random.randint(120, 260))
-                    _human_move(page, target_x - 15, target_y - 8, _steps=12)
-                    page.wait_for_timeout(_random.randint(80, 180))
-                    _human_move(page, target_x, target_y, _steps=6)
-                    page.wait_for_timeout(_random.randint(60, 140))
-                    # Attempt 1: raw mouse click.
-                    page.mouse.down()
-                    page.wait_for_timeout(_random.randint(70, 130))
-                    page.mouse.up()
-                    log(f"cloudflare clicked at ({target_x:.0f},{target_y:.0f})")
-                    debug_capture.capture(page, "cloudflare_clicked")
-
-                    # Poll for token up to ~25s.
-                    def _read_token():
-                        try:
-                            return page.evaluate(
-                                "() => { const els = document.querySelectorAll('input[name=\"cf-turnstile-response\"]');"
-                                "  for (const e of els) { if (e.value && e.value.length > 20) return e.value; } return ''; }"
-                            ) or ""
-                        except Exception:
-                            return ""
-
-                    token_ok = False
-                    for _ in range(50):
-                        if len(_read_token()) > 20:
-                            token_ok = True
-                            break
-                        page.wait_for_timeout(500)
-
-                    # Fallback: click the inner checkbox via frame_locator if raw click did not produce a token.
-                    if not token_ok:
-                        log("cloudflare token not yet, trying inner-frame checkbox click")
-                        debug_capture.capture(page, "cloudflare_retry_inner")
-                        try:
-                            fl = page.frame_locator('iframe[src*="challenges.cloudflare.com/cdn-cgi/challenge-platform"]')
-                            # Try common Turnstile selectors.
-                            for _sel in ["input[type=checkbox]", "label", "#challenge-stage", "body"]:
-                                try:
-                                    fl.locator(_sel).first.click(timeout=3000, force=True)
-                                    log(f"inner-frame click via {_sel} succeeded")
-                                    break
-                                except Exception as _iexc:
-                                    log(f"inner-frame click via {_sel} failed: {_iexc}")
-                        except Exception as _fexc:
-                            log(f"inner-frame fallback error: {_fexc}")
-                        # Poll once more.
-                        for _ in range(30):
-                            if len(_read_token()) > 20:
-                                token_ok = True
-                                break
-                            page.wait_for_timeout(500)
-
-                    log(f"cloudflare token acquired: {token_ok}")
-
-                    # A token existing in the DOM does not guarantee success.
-                    # Under Xvfb, CF often issues a "challenge" token that fails
-                    # server-side siteverify. Wait for the widget to reach a
-                    # visible success state, then let the token stabilize for a
-                    # few seconds so background validation completes.
-                    if token_ok:
-                        try:
-                            # The inner iframe's title changes to include a
-                            # success/verified string when CF is fully happy.
-                            # Wait up to ~15s for the widget to reach that state.
-                            def _widget_state():
-                                try:
-                                    return page.evaluate(
-                                        "() => { const els = document.querySelectorAll('iframe');"
-                                        "  for (const e of els) { const t = e.title || '';"
-                                        "    if (/challenges\\.cloudflare/.test(e.src) || /Turnstile|verify/i.test(t))"
-                                        "      return t; } return ''; }"
-                                    ) or ""
-                                except Exception:
-                                    return ""
-
-                            _state_ok = False
-                            for _ in range(30):
-                                _title = _widget_state()
-                                # Success titles include "success", "verified", or
-                                # localized equivalents. If the title stops
-                                # advertising a challenge, we assume success.
-                                if _title and not any(
-                                    kw in _title.lower()
-                                    for kw in ("challenge", "verify you", "widget containing", "確認")
-                                ):
-                                    _state_ok = True
-                                    break
-                                page.wait_for_timeout(500)
-                            log(f"cloudflare widget state confirmed: {_state_ok} (title={_widget_state()[:60]!r})")
-
-                            # Extra stabilization: siteverify happens on submit,
-                            # so give CF a beat to finalize the token.
-                            page.wait_for_timeout(3000)
-                            debug_capture.capture(page, "cloudflare_stabilized")
-                        except Exception as _st_err:
-                            log(f"cloudflare stabilization check error: {_st_err}")
-                    debug_capture.capture(page, "cloudflare_done" if token_ok else "cloudflare_wait_timeout")
-                else:
-                    log("cloudflare iframe bounding box not available")
-        except Exception as _cf_err:
-            log(f"cloudflare click error: {_cf_err}")
+        log(f"cloudflare token acquired via NopeCHA: {token_ok}")
+        if token_ok:
+            # Small stabilization delay so CF finalizes the token before submit.
+            page.wait_for_timeout(2000)
+            debug_capture.capture(page, "cloudflare_done")
+        else:
+            debug_capture.capture(page, "cloudflare_wait_timeout")
+            log("[WARN] NopeCHA did not produce a Turnstile token in time; proceeding anyway")
 
         log("submit final continue button")
         debug_capture.capture(page, "before_submit")
@@ -505,52 +433,21 @@ def continue_free_vps(page: Page):
         debug_capture.capture(page, "final_submit_clicked")
 
         page.wait_for_timeout(2000)
-        debug_capture.capture(page, f"result_a{_attempt + 1}")
+        debug_capture.capture(page, "result")
 
         cf_failed = page.locator("text=認証に失敗しました").count() > 0
         captcha_wrong = page.locator("text=入力された認証コードが正しくありません").count() > 0
 
         if cf_failed or captcha_wrong:
             _kind = "cf_failed" if cf_failed else "captcha_wrong"
-            log(f"{_kind} on attempt {_attempt + 1}, going back to captcha form")
-            debug_capture.capture(page, f"{_kind}_a{_attempt + 1}")
-            # The error page has no captcha form; navigate back to reach the form again.
-            try:
-                page.go_back(wait_until="domcontentloaded", timeout=15000)
-                page.wait_for_timeout(1500)
-            except Exception as _be:
-                log(f"go_back failed: {_be}")
-            # If the form isn't there, click the update flow again.
-            if page.locator('[placeholder="上の画像の数字を入力"]').count() == 0:
-                log("captcha form missing after go_back, re-entering flow")
-                try:
-                    _btn = page.get_by_text("更新する")
-                    _btn.wait_for(state="visible", timeout=8000)
-                    _btn.click()
-                    _cont = page.get_by_text("引き続き無料VPSの利用を継続する")
-                    _cont.wait_for(state="visible", timeout=10000)
-                    _cont.click()
-                except Exception as _reenter_err:
-                    log(f"re-enter flow failed: {_reenter_err}")
-            # Wait for the CAPTCHA input to reappear before next attempt starts polling image.
-            try:
-                page.wait_for_selector('[placeholder="上の画像の数字を入力"]', timeout=15000)
-            except Exception:
-                log("captcha input did not reappear")
-            page.wait_for_timeout(1000)
-            continue
-        elif False:  # legacy branch retained for structure; both handled above
-            log(f"CAPTCHA code wrong on attempt {_attempt + 1}, retrying")
-            debug_capture.capture(page, f"captcha_wrong_a{_attempt + 1}")
-            page.wait_for_timeout(1000)
-            continue
+            log(f"[FAIL] {_kind} - no retry, will be retried by tomorrow's schedule")
+            debug_capture.capture(page, _kind)
+            break
 
         log("auth succeeded")
         _succeeded = True
         _flow_result["succeeded"] = True
         break
-    else:
-        log("all captcha attempts exhausted")
 
     debug_capture.capture(page, "final_state")
     debug_capture.finalize()
@@ -572,13 +469,36 @@ def main():
 
     log(f"runtime mode: headless={headless}, ci={is_ci}")
 
+    # NopeCHA extension: solves Cloudflare Turnstile automatically.
+    # Path is exported by vps_setup.sh (do_run) after unpacking the CRX.
+    nopecha_path = os.environ.get("NOPECHA_EXTENSION_PATH")
+    extra_flags = []
+    if nopecha_path and os.path.isdir(nopecha_path):
+        log(f"loading NopeCHA extension: {nopecha_path}")
+        extra_flags = [
+            f"--disable-extensions-except={nopecha_path}",
+            f"--load-extension={nopecha_path}",
+        ]
+    else:
+        log("NOPECHA_EXTENSION_PATH not set or missing; running without NopeCHA")
+
     fetch_kwargs = {
-        "headless": headless,
+        # Extensions require headful Chromium. Xvfb (started by vps_setup.sh)
+        # provides the virtual display on headless servers.
+        "headless": False if extra_flags else headless,
         "page_action": continue_free_vps,
-        "solve_cloudflare": True,
+        # solve_cloudflare is left off because NopeCHA handles Turnstile.
+        "solve_cloudflare": False,
         "network_idle": True,
-        "timeout": 60
+        "timeout": 60,
     }
+    if extra_flags:
+        fetch_kwargs["extra_flags"] = extra_flags
+        # Persist the browser profile so the extension retains settings
+        # (e.g. NopeCHA API key) between runs.
+        _profile_dir = os.path.join(BASE_DIR, "chromium-profile")
+        os.makedirs(_profile_dir, exist_ok=True)
+        fetch_kwargs["user_data_dir"] = _profile_dir
 
     proxy_server = os.environ.get("PROXY_SERVER")
     if proxy_server:
