@@ -236,13 +236,33 @@ def continue_free_vps(page: Page):
         log(f"suspended check error: {e}")
 
     _succeeded = False
+    _prev_img_src = None
     for _attempt in range(3):
         log(f"captcha attempt {_attempt + 1}/3")
         debug_capture.capture(page, f"before_captcha_a{_attempt + 1}")
-        img_src = page.locator('img[src^="data:"]').get_attribute("src")
+
+        # Wait for a *fresh* CAPTCHA image (image mime only, and different from previous attempt).
+        img_src = None
+        try:
+            page.wait_for_selector('img[src^="data:image"]', state="visible", timeout=15000)
+            # Poll up to ~10s for a NEW image (different data URL than previous attempt).
+            for _ in range(20):
+                _cand = page.locator('img[src^="data:image"]').first.get_attribute("src")
+                if _cand and _cand != _prev_img_src:
+                    img_src = _cand
+                    break
+                page.wait_for_timeout(500)
+            if img_src is None:
+                # Give up waiting for a different image; take whatever is there.
+                img_src = page.locator('img[src^="data:image"]').first.get_attribute("src")
+        except Exception as _we:
+            log(f"captcha image wait failed: {_we}")
+            img_src = page.locator('img[src^="data:image"]').first.get_attribute("src") or \
+                       page.locator('img[src^="data:"]').first.get_attribute("src")
 
         if img_src:
-            log("captcha found, trying local model first")
+            log(f"captcha found (len={len(img_src)}, head={img_src[:40]!r}), trying local model first")
+            _prev_img_src = img_src
             code = None
 
             # 1) Local Keras model (offline, no external dependency).
