@@ -151,7 +151,10 @@ def build_phase1_scenario(email: str, password: str) -> list:
         {"wait": 1500},
 
         # --- 必要情報を JS で一括抽出 ---
-        {"evaluate": {"script": extract}},
+        # Scrapfly に `evaluate` ステップは存在せず、JS 実行と戻り値取得は
+        # すべて `execute` で行う。戻り値は browser_data のシナリオ結果に入る。
+        # ※ execute の script は式 (return 可能) を受け付けるので `return {...}` 形式で書く。
+        {"execute": {"script": "return " + extract}},
     ]
 
 
