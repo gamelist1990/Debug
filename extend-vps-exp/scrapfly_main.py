@@ -66,30 +66,19 @@ def get_env(name: str) -> str:
 # JS シナリオ: ログイン → 契約情報 → 更新する → 継続する → CAPTCHA ページ
 # ---------------------------------------------------------------------------
 def build_phase1_scenario(email: str, password: str) -> list:
+    # Scrapfly の execute は 3s 上限。await Promise ループは使えないので
+    # 単発チェックにする。モーダルの登場待ちはシナリオ側の wait で行う。
     modal_dismiss = (
-        "await new Promise(r => {"
-        "  const t0 = Date.now();"
-        "  const tick = () => {"
-        "    const m = document.querySelector('#campaignModalForFreeUsers.isOpen');"
-        "    if (m) { const btn = m.querySelector('button.modal__close'); if (btn) btn.click(); return r(); }"
-        "    if (Date.now() - t0 > 5000) return r();"
-        "    setTimeout(tick, 200);"
-        "  };"
-        "  tick();"
-        "});"
+        "const m = document.querySelector('#campaignModalForFreeUsers.isOpen');"
+        "if (m) { const btn = m.querySelector('button.modal__close'); if (btn) btn.click(); }"
     )
 
+    # Turnstile トークン待ちも execute 3s 上限のためポーリングしない。
+    # 現在値を見て、不在なら空文字を返すだけ。
+    # 実際の待ちはシナリオ側の wait で行う。
     wait_turnstile = (
-        "await new Promise(r => {"
-        "  const t0 = Date.now();"
-        "  const tick = () => {"
-        "    const el = document.querySelector('input[name=\"cf-turnstile-response\"]');"
-        "    if (el && el.value && el.value.length > 20) return r();"
-        "    if (Date.now() - t0 > 10000) return r();"
-        "    setTimeout(tick, 400);"
-        "  };"
-        "  tick();"
-        "});"
+        "const el = document.querySelector('input[name=\"cf-turnstile-response\"]');"
+        "return (el && el.value) ? el.value : '';"
     )
 
     extract = (
@@ -155,12 +144,11 @@ def build_phase1_scenario(email: str, password: str) -> list:
         {"execute": {"script": click_by_text.replace("{text}", "'\u5f15\u304d\u7d9a\u304d\u7121\u6599VPS\u306e\u5229\u7528\u3092\u7d99\u7d9a\u3059\u308b'")}},
 
         # --- CAPTCHA 画像と Turnstile の両方が揃うのを待つ ---
-        # ※ Scrapfly の wait_for_selector は最大 15s。足りなければ wait を足して待つ。
+        # ※ Scrapfly の wait_for_selector は最大 15s、execute は最大 3s。
         # ※ シナリオ全体の 45s 上限に収めるためタイトに設定。
-        {"wait_for_selector": {"selector": "img[src^='data:image']", "timeout": 8000}},
-        {"wait": 500},
-        {"execute": {"script": wait_turnstile}},
-        {"wait": 500},
+        # ※ Turnstile のトークン生成は非同期なので、wait で実時間を使って待つ。
+        {"wait_for_selector": {"selector": "img[src^='data:image']", "timeout": 5000}},
+        {"wait": 3000},
 
         # --- 必要情報を JS で一括抽出 ---
         # Scrapfly に `evaluate` ステップは存在せず、JS 実行と戻り値取得は
