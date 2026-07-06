@@ -449,6 +449,49 @@ def continue_free_vps(page: Page):
                             page.wait_for_timeout(500)
 
                     log(f"cloudflare token acquired: {token_ok}")
+
+                    # A token existing in the DOM does not guarantee success.
+                    # Under Xvfb, CF often issues a "challenge" token that fails
+                    # server-side siteverify. Wait for the widget to reach a
+                    # visible success state, then let the token stabilize for a
+                    # few seconds so background validation completes.
+                    if token_ok:
+                        try:
+                            # The inner iframe's title changes to include a
+                            # success/verified string when CF is fully happy.
+                            # Wait up to ~15s for the widget to reach that state.
+                            def _widget_state():
+                                try:
+                                    return page.evaluate(
+                                        "() => { const els = document.querySelectorAll('iframe');"
+                                        "  for (const e of els) { const t = e.title || '';"
+                                        "    if (/challenges\\.cloudflare/.test(e.src) || /Turnstile|verify/i.test(t))"
+                                        "      return t; } return ''; }"
+                                    ) or ""
+                                except Exception:
+                                    return ""
+
+                            _state_ok = False
+                            for _ in range(30):
+                                _title = _widget_state()
+                                # Success titles include "success", "verified", or
+                                # localized equivalents. If the title stops
+                                # advertising a challenge, we assume success.
+                                if _title and not any(
+                                    kw in _title.lower()
+                                    for kw in ("challenge", "verify you", "widget containing", "確認")
+                                ):
+                                    _state_ok = True
+                                    break
+                                page.wait_for_timeout(500)
+                            log(f"cloudflare widget state confirmed: {_state_ok} (title={_widget_state()[:60]!r})")
+
+                            # Extra stabilization: siteverify happens on submit,
+                            # so give CF a beat to finalize the token.
+                            page.wait_for_timeout(3000)
+                            debug_capture.capture(page, "cloudflare_stabilized")
+                        except Exception as _st_err:
+                            log(f"cloudflare stabilization check error: {_st_err}")
                     debug_capture.capture(page, "cloudflare_done" if token_ok else "cloudflare_wait_timeout")
                 else:
                     log("cloudflare iframe bounding box not available")
