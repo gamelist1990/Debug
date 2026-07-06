@@ -305,19 +305,19 @@ do_install() {
 
   # Attempt 1: pinned TF, binary-only (fast path, works on 3.10-3.12).
   if pip install --quiet --only-binary=:all: \
-        "scrapling[fetchers]" playwright pillow \
+        "scrapling[fetchers]" playwright pillow scrapfly-sdk \
         "tensorflow-cpu==${TF_VERSION}" 2>/tmp/pip1.err; then
     log "Installed with pinned tensorflow-cpu==${TF_VERSION}"
   # Attempt 2: latest TF, binary-only (works when TF has a fresh wheel).
   elif pip install --quiet --only-binary=:all: \
-        "scrapling[fetchers]" playwright pillow tensorflow-cpu 2>/tmp/pip2.err; then
+        "scrapling[fetchers]" playwright pillow scrapfly-sdk tensorflow-cpu 2>/tmp/pip2.err; then
     log "Installed with latest tensorflow-cpu (binary wheel)"
   # Attempt 3: latest TF, allow source builds (works on very new Python
   # where TF has no wheel yet; requires build-essential + python3-dev,
   # which we already installed above via apt).
   else
     warn "No binary wheels found; falling back to source build (slow)..."
-    pip install "scrapling[fetchers]" playwright pillow tensorflow-cpu
+    pip install "scrapling[fetchers]" playwright pillow scrapfly-sdk tensorflow-cpu
   fi
 
   # ---- 5. Playwright browsers ----
@@ -377,7 +377,11 @@ do_install() {
 EMAIL=your-email@example.com
 PASSWORD=your-password
 
-# Optional HTTP/HTTPS proxy (helps if your VPS IP is CF-flagged).
+# Scrapfly API key (required for scrapfly_main.py).
+# Get one at https://scrapfly.io/dashboard
+api=scp-live-xxxxxxxxxxxxxxxxxxxxxxxx
+
+# Optional HTTP/HTTPS proxy (only used by legacy main.py; ignored by scrapfly_main.py).
 # PROXY_SERVER=http://user:pass@host:port
 EOF
     chmod 600 "$APP_DIR/.env"
@@ -442,10 +446,35 @@ do_run() {
     set +a
   fi
 
-  log "$(date -Is) starting main.py"
-  python main.py
+  # ---- Choose runner ----
+  # Default to the Scrapfly-based runner (scrapfly_main.py), which offloads
+  # Cloudflare Turnstile bypass to Scrapfly's ASP feature. The legacy
+  # Scrapling+Playwright runner (main.py) is kept as a fallback but is known
+  # to fail on headless VPS due to CF challenge tokens being rejected
+  # server-side.
+  #   RUNNER=scrapfly (default) -> scrapfly_main.py
+  #   RUNNER=legacy            -> main.py
+  local RUNNER="${RUNNER:-scrapfly}"
+  local script="scrapfly_main.py"
+  case "$RUNNER" in
+    scrapfly) script="scrapfly_main.py" ;;
+    legacy)   script="main.py" ;;
+    *)
+      warn "Unknown RUNNER='$RUNNER', falling back to scrapfly_main.py"
+      script="scrapfly_main.py"
+      ;;
+  esac
+
+  if [ "$script" = "scrapfly_main.py" ] && [ -z "${api:-}" ]; then
+    error "Scrapfly API key not set. Add 'api=scp-live-...' to $APP_DIR/.env"
+    error "Or run with RUNNER=legacy to use the (currently broken) Playwright path."
+    return 2
+  fi
+
+  log "$(date -Is) starting $script (RUNNER=$RUNNER)"
+  python "$script"
   local rc=$?
-  log "$(date -Is) main.py exited with code $rc"
+  log "$(date -Is) $script exited with code $rc"
   return $rc
 }
 
