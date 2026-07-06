@@ -151,12 +151,10 @@ def build_phase1_scenario(email: str, password: str) -> list:
         {"wait": 1500},
         {"execute": {"script": click_by_text.replace("{text}", "'\u5f15\u304d\u7d9a\u304d\u7121\u6599VPS\u306e\u5229\u7528\u3092\u7d99\u7d9a\u3059\u308b'")}},
 
-        # --- CAPTCHA 画像と Turnstile の両方が揃うのを待つ ---
-        # ※ Scrapfly の wait_for_selector は最大 15s、execute は最大 3s。
-        # ※ シナリオ全体の 45s 上限に収めるためタイトに設定。
-        # ※ Turnstile のトークン生成は非同期なので、wait で実時間を使って待つ。
-        {"wait_for_selector": {"selector": "img[src^='data:image']", "timeout": 5000}},
-        {"wait": 3000},
+        # --- CAPTCHA ページのレンダリング待ち ---
+        # ※ wait_for_selector で失敗させると extract に到達できないので、
+        # ※ ここでは見つからなくても固定時間 wait で進めて、extract で状態を拾う。
+        {"wait": 3500},
 
         # --- 必要情報を JS で一括抽出 ---
         # Scrapfly に `evaluate` ステップは存在せず、JS 実行と戻り値取得は
