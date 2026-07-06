@@ -144,8 +144,9 @@ def build_phase1_scenario(email: str, password: str) -> list:
         {"click": {"selector": "text=\u5f15\u304d\u7d9a\u304d\u7121\u6599VPS\u306e\u5229\u7528\u3092\u7d99\u7d9a\u3059\u308b"}},
 
         # --- CAPTCHA 画像と Turnstile の両方が揃うのを待つ ---
-        {"wait_for_selector": {"selector": "img[src^='data:image']", "timeout": 30000}},
-        {"wait": 1500},
+        # ※ Scrapfly の wait_for_selector は最大 15s。足りなければ wait を足して待つ。
+        {"wait_for_selector": {"selector": "img[src^='data:image']", "timeout": 15000}},
+        {"wait": 2000},
         {"execute": {"script": wait_turnstile}},
         {"wait": 1500},
 
