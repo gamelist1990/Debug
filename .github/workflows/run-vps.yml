@@ -32,6 +32,9 @@ jobs:
       - name: Install ffmpeg and Xvfb
         run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb
 
+      - name: Install xdotool
+        run: sudo apt-get install -y xdotool
+
       - name: Run script
         env:
           EMAIL: ${{ secrets.EMAIL }}
@@ -42,8 +45,12 @@ jobs:
           DEBUG_ARTIFACTS_DIR: ${{ github.workspace }}/extend-vps-exp/artifacts
           DISPLAY: ":99"
         run: |
-          Xvfb :99 -screen 0 1280x900x24 &
+          Xvfb :99 -screen 0 1920x1080x24 -ac -nolisten tcp &
+          sleep 2
+          # Warm up the virtual display with a real mouse move so CF sees prior activity.
+          xdotool mousemove 640 400 || true
           sleep 1
+          xdotool mousemove 800 500 || true
           cd extend-vps-exp && python main.py
 
       - name: Upload debug artifacts

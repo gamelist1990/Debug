@@ -243,24 +243,32 @@ def continue_free_vps(page: Page):
 
         if img_src:
             log("captcha found, sending to solver")
-            try:
-                req = Request(
-                    "https://captcha-120546510085.asia-northeast1.run.app",
-                    data=img_src.encode()
-                )
-                _proxy_url = os.environ.get("PROXY_SERVER")
-                if _proxy_url:
-                    _opener = build_opener(ProxyHandler({"https": _proxy_url, "http": _proxy_url}))
-                    res = _opener.open(req).read().decode().strip()
-                else:
-                    res = urlopen(req).read().decode().strip()
-                code = res
-                log(f"captcha solved: {code}")
-                debug_capture.capture(page, "captcha_solved")
-            except Exception as e:
-                log(f"captcha solve failed: {e}")
+            _proxy_url = os.environ.get("PROXY_SERVER")
+            code = None
+            import time as _time
+            for _solver_try in range(4):
+                try:
+                    req = Request(
+                        "https://captcha-120546510085.asia-northeast1.run.app",
+                        data=img_src.encode()
+                    )
+                    if _proxy_url:
+                        _opener = build_opener(ProxyHandler({"https": _proxy_url, "http": _proxy_url}))
+                        res = _opener.open(req, timeout=20).read().decode().strip()
+                    else:
+                        res = urlopen(req, timeout=20).read().decode().strip()
+                    if res:
+                        code = res
+                        log(f"captcha solved: {code}")
+                        debug_capture.capture(page, "captcha_solved")
+                        break
+                    log(f"captcha solver returned empty (try {_solver_try + 1}/4)")
+                except Exception as e:
+                    log(f"captcha solve try {_solver_try + 1}/4 failed: {e}")
+                _time.sleep(1 + _solver_try * 2)  # 1s, 3s, 5s, 7s
+            if code is None:
                 if os.environ.get("CI"):
-                    log("CI: solver failed, skipping this attempt")
+                    log("CI: solver failed after retries, skipping this attempt")
                     continue
                 code = input("CAPTCHA: ").strip()
         else:
@@ -290,10 +298,12 @@ def continue_free_vps(page: Page):
             _page.mouse.move(_x, _y, steps=_steps)
             _page.wait_for_timeout(120)
 
+        import random as _random
         try:
-            # Wait for the outer CF iframe to attach (up to ~10s).
+            # Wait for the outer CF iframe to attach (up to ~15s).
             outer_frame_el = None
-            for _ in range(20):
+            cf_iframe = None
+            for _ in range(30):
                 cf_iframe = page.frame(url=_CF_PAT)
                 if cf_iframe is not None:
                     try:
@@ -307,37 +317,79 @@ def continue_free_vps(page: Page):
             if outer_frame_el is None:
                 log("cloudflare iframe not found")
             else:
-                # Warm up the mouse: two staged moves from an arbitrary point.
+                # Scroll the widget into view first (mimics user reading the form).
+                try:
+                    outer_frame_el.scroll_into_view_if_needed()
+                    page.wait_for_timeout(300)
+                except Exception:
+                    pass
+
+                # Warm up the mouse with random jitter from arbitrary start point.
                 vp = page.viewport_size or {"width": 1280, "height": 900}
-                _human_move(page, max(50, vp["width"] // 3), max(50, vp["height"] // 3), _steps=15)
+                _sx = _random.randint(80, max(120, vp["width"] // 2))
+                _sy = _random.randint(80, max(120, vp["height"] // 3))
+                _human_move(page, _sx, _sy, _steps=12)
+                _human_move(page, _sx + _random.randint(-40, 40), _sy + _random.randint(-30, 30), _steps=8)
 
                 box = outer_frame_el.bounding_box()
                 if box:
-                    # Turnstile checkbox sits near the left-center of the iframe.
-                    target_x = box["x"] + 30
-                    target_y = box["y"] + box["height"] / 2
-                    # Approach diagonally, then land on the target.
-                    _human_move(page, target_x - 60, target_y - 20, _steps=18)
-                    _human_move(page, target_x, target_y, _steps=16)
+                    # Turnstile checkbox sits ~27px right, ~28px down inside the widget.
+                    target_x = box["x"] + 27 + _random.uniform(-2, 2)
+                    target_y = box["y"] + 28 + _random.uniform(-2, 2)
+                    # Diagonal approach with two waypoints.
+                    _human_move(page, target_x - 80, target_y - 30, _steps=20)
+                    page.wait_for_timeout(_random.randint(120, 260))
+                    _human_move(page, target_x - 15, target_y - 8, _steps=12)
+                    page.wait_for_timeout(_random.randint(80, 180))
+                    _human_move(page, target_x, target_y, _steps=6)
+                    page.wait_for_timeout(_random.randint(60, 140))
+                    # Attempt 1: raw mouse click.
                     page.mouse.down()
-                    page.wait_for_timeout(90)
+                    page.wait_for_timeout(_random.randint(70, 130))
                     page.mouse.up()
                     log(f"cloudflare clicked at ({target_x:.0f},{target_y:.0f})")
                     debug_capture.capture(page, "cloudflare_clicked")
 
-                    # Poll for token presence (cf-turnstile-response) up to ~15s.
-                    token_ok = False
-                    for _ in range(30):
+                    # Poll for token up to ~25s.
+                    def _read_token():
                         try:
-                            token = page.evaluate(
-                                "() => document.querySelector('input[name=\"cf-turnstile-response\"]')?.value || ''"
-                            )
-                            if token and len(token) > 20:
+                            return page.evaluate(
+                                "() => { const els = document.querySelectorAll('input[name=\"cf-turnstile-response\"]');"
+                                "  for (const e of els) { if (e.value && e.value.length > 20) return e.value; } return ''; }"
+                            ) or ""
+                        except Exception:
+                            return ""
+
+                    token_ok = False
+                    for _ in range(50):
+                        if len(_read_token()) > 20:
+                            token_ok = True
+                            break
+                        page.wait_for_timeout(500)
+
+                    # Fallback: click the inner checkbox via frame_locator if raw click did not produce a token.
+                    if not token_ok:
+                        log("cloudflare token not yet, trying inner-frame checkbox click")
+                        debug_capture.capture(page, "cloudflare_retry_inner")
+                        try:
+                            fl = page.frame_locator('iframe[src*="challenges.cloudflare.com/cdn-cgi/challenge-platform"]')
+                            # Try common Turnstile selectors.
+                            for _sel in ["input[type=checkbox]", "label", "#challenge-stage", "body"]:
+                                try:
+                                    fl.locator(_sel).first.click(timeout=3000, force=True)
+                                    log(f"inner-frame click via {_sel} succeeded")
+                                    break
+                                except Exception as _iexc:
+                                    log(f"inner-frame click via {_sel} failed: {_iexc}")
+                        except Exception as _fexc:
+                            log(f"inner-frame fallback error: {_fexc}")
+                        # Poll once more.
+                        for _ in range(30):
+                            if len(_read_token()) > 20:
                                 token_ok = True
                                 break
-                        except Exception:
-                            pass
-                        page.wait_for_timeout(500)
+                            page.wait_for_timeout(500)
+
                     log(f"cloudflare token acquired: {token_ok}")
                     debug_capture.capture(page, "cloudflare_done" if token_ok else "cloudflare_wait_timeout")
                 else:
