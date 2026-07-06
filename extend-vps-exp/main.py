@@ -235,9 +235,17 @@ def continue_free_vps(page: Page):
     except Exception as e:
         log(f"suspended check error: {e}")
 
+    # ML-based CAPTCHA solving is ~90% accurate at best (this matches the
+    # reference upstream at GitHub30/captcha-cloudrun). If attempt 1 is
+    # rejected, the site navigates to an error page from which we cannot
+    # cleanly recover (POST-navigation go_back fails with ERR_CACHE_MISS,
+    # and re-entering the flow times out). Rather than fighting the retry
+    # infrastructure, we accept one shot and let tomorrow's schedule retry.
+    # In CI we do a single attempt; interactive runs still get 3 attempts.
     _succeeded = False
     _prev_img_src = None
-    for _attempt in range(3):
+    _max_attempts = 1 if os.environ.get("CI") else 3
+    for _attempt in range(_max_attempts):
         log(f"captcha attempt {_attempt + 1}/3")
         debug_capture.capture(page, f"before_captcha_a{_attempt + 1}")
 
