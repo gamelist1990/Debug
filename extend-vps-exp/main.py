@@ -1,492 +1,427 @@
+"""Xserver free VPS auto-renew — CloakBrowser edition.
+
+Uses CloakBrowser (stealth Chromium with C++ source-level patches) to bypass
+Cloudflare Turnstile natively, and a local Keras model to read the numeric
+CAPTCHA image.
+
+Environment variables (all optional except EMAIL/PASSWORD):
+    EMAIL, PASSWORD          — Xserver login credentials (required)
+    HEADLESS                 — "1"/"true" to force headless (default: headed via Xvfb)
+    CI                       — set in CI/cron: no interactive prompts
+    PROXY_SERVER             — proxy URL (http://, https://, socks5://)
+    CLOAKBROWSER_LICENSE_KEY — CloakBrowser Pro license (unlocks Chromium 148)
+    CAPTCHA_MODEL_PATH       — override the location of xserver_captcha.keras
+    DEBUG_VIDEO              — "1" to assemble frames/ into an mp4 with ffmpeg
+"""
+from __future__ import annotations
+
+import logging
 import os
 import shutil
 import subprocess
+import sys
+import time
 from datetime import datetime
 from getpass import getpass
 from pathlib import Path
-import threading as _threading
+from typing import Optional
 
-# .env loader追加
-def load_dotenv(path: str = ".env"):
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    env_path = path if os.path.isabs(path) else os.path.join(base_dir, path)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-    if not os.path.exists(env_path):
-        print(f"[DEBUG] .env not found: {env_path}")
+
+# ---------------------------------------------------------------------------
+# .env loader (no external dep)
+# ---------------------------------------------------------------------------
+def _load_dotenv(path: str) -> None:
+    if not os.path.exists(path):
         return
-
-    print(f"[DEBUG] loading .env from: {env_path}")
-
-    with open(env_path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if not line or line.startswith("#"):
+            if not line or line.startswith("#") or "=" not in line:
                 continue
-            if "=" in line:
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip())
-
-# 起動時に読み込み（ファイル基準パスに修正）
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
 
 
-import re as _re
-from scrapling.fetchers import StealthyFetcher
-from playwright.sync_api import Page
-from urllib.request import Request, urlopen
-from urllib.request import ProxyHandler, build_opener
-import logging
+_load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s")
-log = logging.getLogger(__name__).info
+log = logging.getLogger("xserver-renew").info
 
 LOGIN_URL = "https://secure.xserver.ne.jp/xapanel/login/xvps/"
 
 
-class DebugCapture:
-    # Always-on frame directory (independent of DEBUG_VIDEO).
-    # Each call to update_live() writes a new numbered frame here so the
-    # whole session can be replayed later.
-    LIVE_DIR = Path(BASE_DIR) / "frames"
+# ---------------------------------------------------------------------------
+# Frame capture (numbered PNGs, main-thread only)
+# ---------------------------------------------------------------------------
+class FrameCapture:
+    """Save numbered screenshots so the flow can be replayed after the fact.
 
-    def __init__(self, enabled: bool, output_dir: Path):
-        self.enabled = enabled
-        self.output_dir = output_dir
-        self.frames_dir = output_dir / "frames"
-        self.events_path = output_dir / "events.log"
-        self.video_path = output_dir / "debug.mp4"
-        self.frame_index = 0
-        self.started = False
-        # Independent counter for the always-on live frames.
-        self._live_index = 0
-        # Ensure the always-on frames dir exists early and is fresh for
-        # this run (previous run's frames are wiped so operators only see
-        # the current session).
+    Frames land at ``frames/frame_NNNNN.png``. Old frames are wiped at start
+    so operators only see the current run. Optional: if ``DEBUG_VIDEO=1`` and
+    ``ffmpeg`` is on PATH, ``finalize()`` also assembles ``frames/debug.mp4``.
+    """
+
+    def __init__(self, out_dir: Path):
+        self.out_dir = out_dir
+        self.index = 0
+        self.events_path = out_dir / "events.log"
         try:
-            if self.LIVE_DIR.exists():
-                for _p in self.LIVE_DIR.glob("frame_*.png"):
+            if out_dir.exists():
+                for p in out_dir.glob("frame_*.png"):
                     try:
-                        _p.unlink()
-                    except Exception:
+                        p.unlink()
+                    except OSError:
                         pass
-            self.LIVE_DIR.mkdir(parents=True, exist_ok=True)
-        except Exception:
+                try:
+                    self.events_path.unlink()
+                except OSError:
+                    pass
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
             pass
 
-    # ---- Live frames (always on, called from the main thread only) ----
-    def update_live(self, page: Page):
-        """Save a new numbered frame under frames/frame_NNNNN.png.
-
-        Must be called from the same thread that owns `page` (Playwright's
-        sync API is single-threaded). Errors are swallowed so the flow
-        keeps running.
-        """
+    def snap(self, page, label: str) -> None:
+        self.index += 1
+        frame_path = self.out_dir / f"frame_{self.index:05d}.png"
         try:
-            self._live_index += 1
-            frame_path = self.LIVE_DIR / f"frame_{self._live_index:05d}.png"
-            # Explicit type="png" so Playwright doesn't sniff the extension.
             page.screenshot(path=str(frame_path), type="png", full_page=False)
-        except Exception:
+        except Exception as e:
+            log(f"[frame] screenshot failed at {label}: {e}")
+            return
+        try:
+            with open(self.events_path, "a", encoding="utf-8") as f:
+                f.write(f"{datetime.now().isoformat()} frame={self.index:05d} label={label}\n")
+        except OSError:
             pass
 
-    # ---- Indexed capture (existing behaviour, gated by DEBUG_VIDEO) ----
-    def start(self, page: Page | None = None):
-        # Take an immediate live snapshot when we get a page.
-        if page is not None:
-            self.update_live(page)
-
-        if not self.enabled or self.started:
+    def finalize(self) -> None:
+        if os.environ.get("DEBUG_VIDEO", "0").lower() not in {"1", "true", "yes", "on"}:
             return
-        self.frames_dir.mkdir(parents=True, exist_ok=True)
-        self.events_path.parent.mkdir(parents=True, exist_ok=True)
-        self._log_event("capture started (post-login)")
-        self.started = True
-
-    def _log_event(self, message: str):
-        with open(self.events_path, "a", encoding="utf-8") as f:
-            f.write(f"{datetime.now().isoformat()} {message}\n")
-
-    def capture(self, page: Page, label: str):
-        # Always refresh the live frame, even when DEBUG_VIDEO is off.
-        self.update_live(page)
-
-        if not self.enabled or not self.started:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg or self.index == 0:
             return
-
-        self.frame_index += 1
-        frame_path = self.frames_dir / f"frame_{self.frame_index:05d}.png"
-        page.screenshot(path=str(frame_path), full_page=True)
-        self._log_event(f"frame={self.frame_index:05d} label={label} path={frame_path.name}")
-
-    def finalize(self):
-        if not self.enabled or not self.started:
-            return
-
-        ffmpeg_bin = shutil.which("ffmpeg")
-        if ffmpeg_bin is None:
-            self._log_event("ffmpeg not found; png frames kept as artifact")
-            log(f"[DEBUG] ffmpeg not found. Frames are stored at: {self.frames_dir}")
-            return
-
-        input_pattern = str(self.frames_dir / "frame_%05d.png")
+        video_path = self.out_dir / "debug.mp4"
         cmd = [
-            ffmpeg_bin,
-            "-y",
-            "-framerate",
-            "1",
-            "-i",
-            input_pattern,
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            str(self.video_path),
+            ffmpeg, "-y", "-framerate", "1",
+            "-i", str(self.out_dir / "frame_%05d.png"),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            str(video_path),
         ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            self._log_event(f"video created path={self.video_path}")
-            log(f"[DEBUG] video saved: {self.video_path}")
-        else:
-            self._log_event(f"ffmpeg failed: {result.stderr[:400]}")
-            log("[DEBUG] ffmpeg failed; png frames kept as artifact")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0:
+                log(f"[frame] mp4 saved: {video_path}")
+        except Exception as e:
+            log(f"[frame] ffmpeg failed: {e}")
 
 
-def build_debug_capture() -> DebugCapture:
-    enabled = os.environ.get("DEBUG_VIDEO", "0").lower() in {"1", "true", "yes", "on"}
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    root = Path(os.environ.get("DEBUG_ARTIFACTS_DIR", str(Path(BASE_DIR) / "artifacts")))
-    output_dir = root / f"run_{stamp}"
-    return DebugCapture(enabled=enabled, output_dir=output_dir)
-
-
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
 def env_or_prompt(name: str, prompt: str, secret: bool = False) -> str:
     value = os.environ.get(name)
     if value:
         return value
-
-    # In CI there is no interactive TTY, so missing env vars must fail fast.
     if os.environ.get("CI"):
         raise RuntimeError(f"Missing required environment variable: {name}")
-
-    if secret:
-        return getpass(prompt)
-
-    return input(prompt)
+    return getpass(prompt) if secret else input(prompt)
 
 
-def wait_and_click_enabled(locator, timeout_ms: int = 60000, interval_ms: int = 500):
+def _is_headless() -> bool:
+    val = os.environ.get("HEADLESS")
+    if val is not None:
+        return val.lower() in {"1", "true", "yes", "on"}
+    # Default: headed. On VPS this needs Xvfb (started by vps_setup.sh).
+    return False
+
+
+def _wait_and_click(locator, timeout_ms: int = 60_000, interval_ms: int = 500) -> None:
+    """Poll a locator until it's both visible AND enabled, then click."""
     elapsed = 0
     while elapsed < timeout_ms:
-        if locator.is_visible() and locator.is_enabled():
-            locator.click()
-            return
+        try:
+            if locator.is_visible() and locator.is_enabled():
+                locator.click()
+                return
+        except Exception:
+            pass
         locator.page.wait_for_timeout(interval_ms)
         elapsed += interval_ms
-
-    disabled_attr = locator.get_attribute("disabled")
-    aria_disabled_attr = locator.get_attribute("aria-disabled")
-    raise TimeoutError(
-        "Continue button did not become enabled "
-        f"within {timeout_ms}ms (disabled={disabled_attr}, aria-disabled={aria_disabled_attr})"
-    )
+    raise TimeoutError(f"element did not become clickable within {timeout_ms}ms")
 
 
-_flow_result: dict = {"succeeded": False}
+def _wait_for_cf_token(page, timeout_s: int = 60) -> bool:
+    """Poll ``input[name=cf-turnstile-response]`` for a non-empty token.
 
-def continue_free_vps(page: Page):
-    log("start flow")
-    debug_capture = build_debug_capture()
+    CloakBrowser's stealth Chromium usually clears Turnstile automatically
+    within a few seconds. Returns True once populated, False on timeout.
+    """
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            token = page.evaluate(
+                "() => { const els = document.querySelectorAll('input[name=\"cf-turnstile-response\"]');"
+                "  for (const e of els) { if (e.value && e.value.length > 20) return e.value; }"
+                "  return ''; }"
+            ) or ""
+            if len(token) > 20:
+                return True
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return False
 
 
+def _solve_captcha(page) -> Optional[str]:
+    """Grab the base64 CAPTCHA image and run the local Keras solver."""
+    MIN_PAYLOAD = 500
+    img_src: Optional[str] = None
+    try:
+        page.wait_for_selector('img[src^="data:image"]', state="visible", timeout=15_000)
+    except Exception as e:
+        log(f"[captcha] no image visible: {e}")
+
+    # Poll for a real, non-empty base64 payload — the site briefly renders an
+    # empty img before filling in the actual data URL.
+    for _ in range(40):
+        cand = page.locator('img[src^="data:image"]').first.get_attribute("src") or ""
+        if cand and "," in cand and len(cand.split(",", 1)[1]) >= MIN_PAYLOAD:
+            img_src = cand
+            break
+        page.wait_for_timeout(500)
+    if not img_src:
+        log("[captcha] no valid image found")
+        return None
+
+    log(f"[captcha] image ready (len={len(img_src)}), solving locally")
+    try:
+        from captcha_solver import solve as local_solve
+    except Exception as e:
+        log(f"[captcha] solver unavailable: {e}")
+        return None
+    try:
+        code = local_solve(img_src)
+        if code:
+            log(f"[captcha] solved: {code}")
+            return code
+        log("[captcha] solver returned empty")
+    except Exception as e:
+        log(f"[captcha] solver crashed: {e}")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Renewal flow (imperative, single attempt)
+# ---------------------------------------------------------------------------
+def run_renewal(page, cap: FrameCapture) -> bool:
+    """Return True if the renewal succeeded (or was not needed), False otherwise."""
+    log("navigating to login")
+    page.goto(LOGIN_URL, wait_until="load", timeout=60_000)
+    cap.snap(page, "login_page")
+
+    log("filling credentials")
     email = env_or_prompt("EMAIL", "EMAIL: ")
     password = env_or_prompt("PASSWORD", "PASSWORD: ", secret=True)
-
     page.locator("#memberid").fill(email)
     page.locator("#user_password").fill(password)
+    cap.snap(page, "credentials_filled")
     page.get_by_text("ログインする").click()
-    
+    page.wait_for_load_state("domcontentloaded")
+    cap.snap(page, "after_login")
 
+    # "Service not contracted" note — nothing to do.
     try:
         note = page.locator(".noteBar--info")
-        if note.count() > 0:
-            text = note.inner_text()
-            if "未契約のサービスです" in text:
-                log(f"[EXIT] service not contracted -> {text.strip()}")
-                return
+        if note.count() > 0 and "未契約のサービスです" in note.inner_text():
+            log("[EXIT] service not contracted")
+            return True
     except Exception as e:
         log(f"noteBar check error: {e}")
 
-
-    menu = page.locator(".contract__menu").first
-    # Capture starts only after login screen to avoid credential leakage in artifacts.
-    # Passing the page also kicks off the always-on live-frame thread
-    # (frames/live.png overwritten every 0.5s).
-    debug_capture.start(page)
-    debug_capture.capture(page, "after_login")
-
-    # Wait for the campaign modal to appear (it renders with a delay after login),
-    # then close it. If it doesn't appear within 5 s, skip.
+    # Dismiss the free-user campaign modal if it appears.
     try:
-        page.wait_for_selector("#campaignModalForFreeUsers.isOpen", state="visible", timeout=5000)
-        log("campaign modal appeared, clicking close button")
-        close_btn = page.locator("#campaignModalForFreeUsers button.modal__close")
-        close_btn.click()
-        page.wait_for_selector("#campaignModalForFreeUsers.isOpen", state="hidden", timeout=5000)
-        log("campaign modal closed")
-        debug_capture.capture(page, "modal_dismissed")
+        page.wait_for_selector("#campaignModalForFreeUsers.isOpen", state="visible", timeout=5_000)
+        log("dismissing campaign modal")
+        page.locator("#campaignModalForFreeUsers button.modal__close").click()
+        page.wait_for_selector("#campaignModalForFreeUsers.isOpen", state="hidden", timeout=5_000)
+        cap.snap(page, "modal_dismissed")
     except Exception:
-        log("campaign modal did not appear or already closed")
+        log("no campaign modal")
 
+    log("opening contract menu")
+    menu = page.locator(".contract__menu").first
     menu.hover()
     menu.click()
-    debug_capture.capture(page, "menu_opened")
+    cap.snap(page, "menu_opened")
 
     page.get_by_role("link", name="契約情報").first.click()
-    debug_capture.capture(page, "contract_info_opened")
+    page.wait_for_load_state("domcontentloaded")
+    cap.snap(page, "contract_info")
 
+    # 更新する
     try:
-        update_btn = page.get_by_text("更新する")
-        update_btn.wait_for(state="visible", timeout=10000)
-        update_btn.click()
-        debug_capture.capture(page, "update_clicked")
+        btn = page.get_by_text("更新する")
+        btn.wait_for(state="visible", timeout=10_000)
+        btn.click()
+        cap.snap(page, "update_clicked")
     except Exception:
-        log("[EXIT] 更新する button not found - update not available or already done")
-        _flow_result["succeeded"] = True
-        debug_capture.capture(page, "update_not_available")
-        debug_capture.finalize()
-        return
+        log("[EXIT] 更新する button missing — already renewed or unavailable")
+        cap.snap(page, "update_unavailable")
+        return True
 
+    # 引き続き無料VPSの利用を継続する
     try:
-        cont_btn = page.get_by_text("引き続き無料VPSの利用を継続する")
-        cont_btn.wait_for(state="visible", timeout=10000)
-        cont_btn.click()
-        debug_capture.capture(page, "continue_flow_opened")
+        btn = page.get_by_text("引き続き無料VPSの利用を継続する")
+        btn.wait_for(state="visible", timeout=10_000)
+        btn.click()
+        cap.snap(page, "continue_flow")
     except Exception:
-        log("[EXIT] 継続ボタン not found - update not available or already done")
-        _flow_result["succeeded"] = True
-        debug_capture.capture(page, "continue_not_available")
-        debug_capture.finalize()
-        return
+        log("[EXIT] 継続 button missing")
+        cap.snap(page, "continue_unavailable")
+        return True
 
+    # Some plans show "not yet renewable" here — treat as success.
     try:
         suspended = page.locator(".newApp__suspended")
         if suspended.count() > 0:
-            text = suspended.inner_text()
-            log(f"[EXIT] update not available yet -> {text.strip()}")
-            _flow_result["succeeded"] = True
-            debug_capture.finalize()
-            return
+            log(f"[EXIT] update not available yet: {suspended.inner_text().strip()}")
+            cap.snap(page, "suspended")
+            return True
     except Exception as e:
         log(f"suspended check error: {e}")
 
-    # Single-attempt flow:
-    #   - CAPTCHA image number: solved by the local Keras model (offline).
-    #   - Cloudflare Turnstile: handled by the NopeCHA browser extension
-    #     loaded via --load-extension (see main()).
-    # No retries: if this attempt fails, tomorrow's cron will retry.
-    _succeeded = False
-    _prev_img_src = None
-    _max_attempts = 1
-    for _attempt in range(_max_attempts):
-        log(f"captcha attempt {_attempt + 1}/3")
-        debug_capture.capture(page, f"before_captcha_a{_attempt + 1}")
+    # ---- CAPTCHA image ----
+    cap.snap(page, "before_captcha")
+    code = _solve_captcha(page)
+    if not code:
+        if os.environ.get("CI"):
+            log("[FAIL] CI: CAPTCHA unsolved")
+            cap.snap(page, "captcha_failed")
+            return False
+        code = input("CAPTCHA: ").strip()
 
-        # Wait for a *fresh, non-empty* CAPTCHA image.
-        # On retry, the page briefly shows `data:image/jpeg;base64,` (empty payload)
-        # before the new image is filled in; we must skip that placeholder.
-        img_src = None
-        _MIN_PAYLOAD_LEN = 500  # any real base64-encoded captcha is much larger
-        try:
-            page.wait_for_selector('img[src^="data:image"]', state="visible", timeout=15000)
-            # Poll up to ~20s for a NEW *and* non-trivial image.
-            for _ in range(40):
-                _cand = page.locator('img[src^="data:image"]').first.get_attribute("src") or ""
-                if (
-                    _cand
-                    and _cand != _prev_img_src
-                    and len(_cand) >= _MIN_PAYLOAD_LEN
-                    and "," in _cand
-                    and len(_cand.split(",", 1)[1]) >= _MIN_PAYLOAD_LEN
-                ):
-                    img_src = _cand
-                    break
-                page.wait_for_timeout(500)
-            if img_src is None:
-                _cand = page.locator('img[src^="data:image"]').first.get_attribute("src") or ""
-                log(f"captcha image never became fresh (final len={len(_cand)})")
-                # Only accept the final candidate if it has a real payload.
-                if _cand and "," in _cand and len(_cand.split(",", 1)[1]) >= _MIN_PAYLOAD_LEN:
-                    img_src = _cand
-        except Exception as _we:
-            log(f"captcha image wait failed: {_we}")
-            _cand = page.locator('img[src^="data:image"]').first.get_attribute("src") or ""
-            if _cand and "," in _cand and len(_cand.split(",", 1)[1]) >= _MIN_PAYLOAD_LEN:
-                img_src = _cand
+    log("filling CAPTCHA")
+    captcha_input = page.locator('[placeholder="上の画像の数字を入力"]')
+    captcha_input.click()
+    captcha_input.fill("")
+    captcha_input.press_sequentially(code, delay=50)
+    captcha_input.press("Tab")
+    page.wait_for_timeout(500)
+    cap.snap(page, "captcha_filled")
 
-        if img_src:
-            log(f"captcha found (len={len(img_src)}), solving locally")
-            _prev_img_src = img_src
-            code = None
+    # ---- Cloudflare Turnstile (CloakBrowser handles it natively) ----
+    log("waiting for Cloudflare Turnstile token (CloakBrowser)…")
+    cap.snap(page, "cf_waiting")
+    if _wait_for_cf_token(page, timeout_s=60):
+        log("cf token acquired")
+        # Let CF finalize (siteverify happens on submit).
+        time.sleep(2)
+        cap.snap(page, "cf_done")
+    else:
+        log("[WARN] cf token did not populate — trying submit anyway")
+        cap.snap(page, "cf_timeout")
 
-            # Local Keras model only (offline, no remote fallback).
-            try:
-                from captcha_solver import solve as _local_solve
-                _local = _local_solve(img_src)
-                if _local:
-                    code = _local
-                    log(f"captcha solved locally: {code}")
-                    debug_capture.capture(page, "captcha_solved_local")
-                else:
-                    log("local solver returned empty")
-            except Exception as _le:
-                log(f"local solver unavailable: {_le}")
+    # ---- Submit ----
+    log("submitting")
+    submit = page.get_by_role("button", name="無料VPSの利用を継続する").first
+    _wait_and_click(submit, timeout_ms=30_000)
+    cap.snap(page, "submitted")
 
-            if code is None:
-                if os.environ.get("CI"):
-                    log("CI: local solver failed, aborting attempt")
-                    break
-                code = input("CAPTCHA: ").strip()
-        else:
-            log("captcha not found, fallback to manual")
-            if os.environ.get("CI"):
-                log("CI: no captcha image, aborting attempt")
-                break
-            code = input("CAPTCHA: ").strip()
+    # Wait for the server response page.
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=30_000)
+    except Exception:
+        pass
+    time.sleep(2)
+    cap.snap(page, "result")
 
-        log("fill captcha input")
-        captcha_input = page.locator('[placeholder="上の画像の数字を入力"]')
-        captcha_input.click()
-        captcha_input.fill("")
-        captcha_input.press_sequentially(code, delay=50)
-        debug_capture.capture(page, "captcha_typing")
-        captcha_input.press("Tab")
-        page.wait_for_timeout(1000)
-        debug_capture.capture(page, "captcha_filled")
+    if page.locator("text=認証に失敗しました").count() > 0:
+        log("[FAIL] Cloudflare rejected — will retry on next schedule")
+        cap.snap(page, "cf_failed")
+        return False
+    if page.locator("text=入力された認証コードが正しくありません").count() > 0:
+        log("[FAIL] CAPTCHA wrong — will retry on next schedule")
+        cap.snap(page, "captcha_wrong")
+        return False
 
-        # Cloudflare Turnstile: handled entirely by the NopeCHA browser
-        # extension (loaded via --load-extension in main()).
-        # We just wait for the extension to fill the cf-turnstile-response
-        # hidden input, then continue.
-        log("waiting for NopeCHA to solve Cloudflare Turnstile...")
-        debug_capture.capture(page, "cloudflare_waiting")
-
-        def _read_token():
-            try:
-                return page.evaluate(
-                    "() => { const els = document.querySelectorAll('input[name=\"cf-turnstile-response\"]');"
-                    "  for (const e of els) { if (e.value && e.value.length > 20) return e.value; } return ''; }"
-                ) or ""
-            except Exception:
-                return ""
-
-        token_ok = False
-        # Give NopeCHA up to ~60s to click Turnstile and populate the token.
-        for _ in range(120):
-            if len(_read_token()) > 20:
-                token_ok = True
-                break
-            page.wait_for_timeout(500)
-
-        log(f"cloudflare token acquired via NopeCHA: {token_ok}")
-        if token_ok:
-            # Small stabilization delay so CF finalizes the token before submit.
-            page.wait_for_timeout(2000)
-            debug_capture.capture(page, "cloudflare_done")
-        else:
-            debug_capture.capture(page, "cloudflare_wait_timeout")
-            log("[WARN] NopeCHA did not produce a Turnstile token in time; proceeding anyway")
-
-        log("submit final continue button")
-        debug_capture.capture(page, "before_submit")
-        final_submit = page.get_by_role("button", name="無料VPSの利用を継続する").first
-        wait_and_click_enabled(final_submit, timeout_ms=30000)
-        debug_capture.capture(page, "final_submit_clicked")
-
-        page.wait_for_timeout(2000)
-        debug_capture.capture(page, "result")
-
-        cf_failed = page.locator("text=認証に失敗しました").count() > 0
-        captcha_wrong = page.locator("text=入力された認証コードが正しくありません").count() > 0
-
-        if cf_failed or captcha_wrong:
-            _kind = "cf_failed" if cf_failed else "captcha_wrong"
-            log(f"[FAIL] {_kind} - no retry, will be retried by tomorrow's schedule")
-            debug_capture.capture(page, _kind)
-            break
-
-        log("auth succeeded")
-        _succeeded = True
-        _flow_result["succeeded"] = True
-        break
-
-    debug_capture.capture(page, "final_state")
-    debug_capture.finalize()
-
-    if not _succeeded:
-        raise RuntimeError("[FAIL] all authentication attempts failed")
-
-    log("flow completed")
+    log("renewal succeeded")
     print("更新操作を送信しました。ブラウザ上の結果を確認してください。")
+    return True
 
 
-def main():
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+def main() -> int:
     is_ci = os.environ.get("CI") is not None
-    headless_env = os.environ.get("HEADLESS")
-    if headless_env is None:
-        headless = is_ci
-    else:
-        headless = headless_env.lower() in {"1", "true", "yes", "on"}
+    headless = _is_headless()
+    log(f"runtime: headless={headless}, ci={is_ci}")
 
-    log(f"runtime mode: headless={headless}, ci={is_ci}")
+    try:
+        from cloakbrowser import launch_persistent_context
+    except ImportError as e:
+        log(f"[FATAL] cloakbrowser not installed: {e}")
+        log("        Install with: pip install cloakbrowser cloakbrowser[geoip]")
+        return 2
 
-    # NopeCHA extension: solves Cloudflare Turnstile automatically.
-    # Path is exported by vps_setup.sh (do_run) after unpacking the CRX.
-    nopecha_path = os.environ.get("NOPECHA_EXTENSION_PATH")
-    extra_flags = []
-    if nopecha_path and os.path.isdir(nopecha_path):
-        log(f"loading NopeCHA extension: {nopecha_path}")
-        extra_flags = [
-            f"--disable-extensions-except={nopecha_path}",
-            f"--load-extension={nopecha_path}",
-        ]
-    else:
-        log("NOPECHA_EXTENSION_PATH not set or missing; running without NopeCHA")
+    profile_dir = os.path.join(BASE_DIR, "chromium-profile")
+    os.makedirs(profile_dir, exist_ok=True)
 
-    fetch_kwargs = {
-        # Extensions require headful Chromium. Xvfb (started by vps_setup.sh)
-        # provides the virtual display on headless servers.
-        "headless": False if extra_flags else headless,
-        "page_action": continue_free_vps,
-        # solve_cloudflare is left off because NopeCHA handles Turnstile.
-        "solve_cloudflare": False,
-        "network_idle": True,
-        # StealthyFetcher's timeout is in **milliseconds** (per Scrapling docs).
-        # 60_000 ms = 60 s. Previous value of 60 was 60ms and caused instant
-        # Page.goto timeouts.
-        "timeout": 60_000,
+    frames_dir = Path(BASE_DIR) / "frames"
+    cap = FrameCapture(frames_dir)
+
+    # CloakBrowser launch options.
+    # - humanize=True + human_preset="careful": Bézier-curve mouse, per-char
+    #   typing, idle micro-movements. Passes Cloudflare's behavioral checks.
+    # - launch_persistent_context: keeps cookies + localStorage across runs,
+    #   which lets CF trust the profile after the first successful pass and
+    #   also avoids incognito-detection penalties.
+    # - locale/timezone forced to Japan since the target is a JP-only service.
+    launch_kwargs = {
+        "headless": headless,
+        "humanize": True,
+        "human_preset": "careful",
+        "locale": "ja-JP",
+        "timezone": "Asia/Tokyo",
+        "viewport": {"width": 1280, "height": 900},
     }
-    if extra_flags:
-        fetch_kwargs["extra_flags"] = extra_flags
-        # Persist the browser profile so the extension retains settings
-        # (e.g. NopeCHA API key) between runs.
-        _profile_dir = os.path.join(BASE_DIR, "chromium-profile")
-        os.makedirs(_profile_dir, exist_ok=True)
-        fetch_kwargs["user_data_dir"] = _profile_dir
+    proxy = os.environ.get("PROXY_SERVER")
+    if proxy:
+        launch_kwargs["proxy"] = proxy
+    license_key = os.environ.get("CLOAKBROWSER_LICENSE_KEY")
+    if license_key:
+        launch_kwargs["license_key"] = license_key
 
-    proxy_server = os.environ.get("PROXY_SERVER")
-    if proxy_server:
-        fetch_kwargs["proxy"] = proxy_server
+    succeeded = False
+    ctx = None
+    try:
+        ctx = launch_persistent_context(profile_dir, **launch_kwargs)
+        ctx.set_default_timeout(60_000)
+        ctx.set_default_navigation_timeout(60_000)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        succeeded = run_renewal(page, cap)
+    except Exception as e:
+        log(f"[FAIL] unhandled exception: {e}")
+        try:
+            if ctx and ctx.pages:
+                cap.snap(ctx.pages[0], "exception")
+        except Exception:
+            pass
+    finally:
+        cap.finalize()
+        if ctx is not None:
+            try:
+                ctx.close()
+            except Exception:
+                pass
 
-    StealthyFetcher.adaptive = True
-    StealthyFetcher.fetch(LOGIN_URL, **fetch_kwargs)
-
-    if not _flow_result.get("succeeded"):
+    if not succeeded:
         log("[FAIL] flow did not succeed")
-        import sys as _sys
-        _sys.exit(1)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
