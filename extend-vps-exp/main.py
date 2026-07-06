@@ -242,33 +242,50 @@ def continue_free_vps(page: Page):
         img_src = page.locator('img[src^="data:"]').get_attribute("src")
 
         if img_src:
-            log("captcha found, sending to solver")
-            _proxy_url = os.environ.get("PROXY_SERVER")
+            log("captcha found, trying local model first")
             code = None
-            import time as _time
-            for _solver_try in range(4):
-                try:
-                    req = Request(
-                        "https://captcha-120546510085.asia-northeast1.run.app",
-                        data=img_src.encode()
-                    )
-                    if _proxy_url:
-                        _opener = build_opener(ProxyHandler({"https": _proxy_url, "http": _proxy_url}))
-                        res = _opener.open(req, timeout=20).read().decode().strip()
-                    else:
-                        res = urlopen(req, timeout=20).read().decode().strip()
-                    if res:
-                        code = res
-                        log(f"captcha solved: {code}")
-                        debug_capture.capture(page, "captcha_solved")
-                        break
-                    log(f"captcha solver returned empty (try {_solver_try + 1}/4)")
-                except Exception as e:
-                    log(f"captcha solve try {_solver_try + 1}/4 failed: {e}")
-                _time.sleep(1 + _solver_try * 2)  # 1s, 3s, 5s, 7s
+
+            # 1) Local Keras model (offline, no external dependency).
+            try:
+                from captcha_solver import solve as _local_solve
+                _local = _local_solve(img_src)
+                if _local:
+                    code = _local
+                    log(f"captcha solved locally: {code}")
+                    debug_capture.capture(page, "captcha_solved_local")
+                else:
+                    log("local solver returned empty, falling back to remote")
+            except Exception as _le:
+                log(f"local solver unavailable: {_le}")
+
+            # 2) Remote solver fallback (with retries) if local failed.
+            if code is None:
+                _proxy_url = os.environ.get("PROXY_SERVER")
+                import time as _time
+                for _solver_try in range(4):
+                    try:
+                        req = Request(
+                            "https://captcha-120546510085.asia-northeast1.run.app",
+                            data=img_src.encode()
+                        )
+                        if _proxy_url:
+                            _opener = build_opener(ProxyHandler({"https": _proxy_url, "http": _proxy_url}))
+                            res = _opener.open(req, timeout=20).read().decode().strip()
+                        else:
+                            res = urlopen(req, timeout=20).read().decode().strip()
+                        if res:
+                            code = res
+                            log(f"captcha solved remotely: {code}")
+                            debug_capture.capture(page, "captcha_solved_remote")
+                            break
+                        log(f"remote solver returned empty (try {_solver_try + 1}/4)")
+                    except Exception as e:
+                        log(f"remote solve try {_solver_try + 1}/4 failed: {e}")
+                    _time.sleep(1 + _solver_try * 2)  # 1s, 3s, 5s, 7s
+
             if code is None:
                 if os.environ.get("CI"):
-                    log("CI: solver failed after retries, skipping this attempt")
+                    log("CI: both solvers failed, skipping this attempt")
                     continue
                 code = input("CAPTCHA: ").strip()
         else:
