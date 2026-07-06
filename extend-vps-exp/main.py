@@ -490,7 +490,10 @@ def main():
         # solve_cloudflare is left off because NopeCHA handles Turnstile.
         "solve_cloudflare": False,
         "network_idle": True,
-        "timeout": 60,
+        # StealthyFetcher's timeout is in **milliseconds** (per Scrapling docs).
+        # 60_000 ms = 60 s. Previous value of 60 was 60ms and caused instant
+        # Page.goto timeouts.
+        "timeout": 60_000,
     }
     if extra_flags:
         fetch_kwargs["extra_flags"] = extra_flags
