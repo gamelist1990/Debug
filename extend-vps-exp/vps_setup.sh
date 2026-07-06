@@ -249,7 +249,19 @@ do_install() {
   fi
   if [ ! -x "$VENV/bin/python" ]; then
     log "Creating Python venv at $VENV using $venv_py"
-    "$venv_py" -m venv "$VENV"
+    # First try the normal path (with bundled pip via ensurepip).
+    if ! "$venv_py" -m venv "$VENV" 2>/tmp/venv.err; then
+      warn "venv with ensurepip failed:"
+      warn "$(tail -n 3 /tmp/venv.err)"
+      warn "Retrying with --without-pip and bootstrapping pip via get-pip.py"
+      rm -rf "$VENV"
+      "$venv_py" -m venv --without-pip "$VENV"
+      # Bootstrap pip inside the venv.
+      local getpip="/tmp/get-pip.py"
+      curl -fsSL https://bootstrap.pypa.io/get-pip.py -o "$getpip"
+      "$VENV/bin/python" "$getpip"
+      rm -f "$getpip"
+    fi
   fi
   # shellcheck disable=SC1091
   source "$VENV/bin/activate"
