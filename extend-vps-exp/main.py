@@ -45,11 +45,10 @@ LOGIN_URL = "https://secure.xserver.ne.jp/xapanel/login/xvps/"
 
 
 class DebugCapture:
-    # Live-frame path: overwritten every time capture() is called, plus at the
-    # end of each `wait` step in the flow (via update_live()). Always on;
-    # independent of DEBUG_VIDEO.
+    # Always-on frame directory (independent of DEBUG_VIDEO).
+    # Each call to update_live() writes a new numbered frame here so the
+    # whole session can be replayed later.
     LIVE_DIR = Path(BASE_DIR) / "frames"
-    LIVE_PATH = LIVE_DIR / "live.png"
 
     def __init__(self, enabled: bool, output_dir: Path):
         self.enabled = enabled
@@ -59,26 +58,35 @@ class DebugCapture:
         self.video_path = output_dir / "debug.mp4"
         self.frame_index = 0
         self.started = False
-        # Ensure the always-on frames dir exists early so update_live() works
-        # even before start() is called.
+        # Independent counter for the always-on live frames.
+        self._live_index = 0
+        # Ensure the always-on frames dir exists early and is fresh for
+        # this run (previous run's frames are wiped so operators only see
+        # the current session).
         try:
+            if self.LIVE_DIR.exists():
+                for _p in self.LIVE_DIR.glob("frame_*.png"):
+                    try:
+                        _p.unlink()
+                    except Exception:
+                        pass
             self.LIVE_DIR.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
 
-    # ---- Live frame (always on, called from the main thread only) ----
+    # ---- Live frames (always on, called from the main thread only) ----
     def update_live(self, page: Page):
-        """Overwrite frames/live.png with the current viewport.
+        """Save a new numbered frame under frames/frame_NNNNN.png.
 
         Must be called from the same thread that owns `page` (Playwright's
         sync API is single-threaded). Errors are swallowed so the flow
         keeps running.
         """
         try:
-            # Explicit type="png" so Playwright doesn't try to sniff the
-            # extension. We write directly to live.png (no .tmp rename)
-            # because Playwright rejects unknown extensions.
-            page.screenshot(path=str(self.LIVE_PATH), type="png", full_page=False)
+            self._live_index += 1
+            frame_path = self.LIVE_DIR / f"frame_{self._live_index:05d}.png"
+            # Explicit type="png" so Playwright doesn't sniff the extension.
+            page.screenshot(path=str(frame_path), type="png", full_page=False)
         except Exception:
             pass
 
