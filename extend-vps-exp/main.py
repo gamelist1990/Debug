@@ -241,24 +241,37 @@ def continue_free_vps(page: Page):
         log(f"captcha attempt {_attempt + 1}/3")
         debug_capture.capture(page, f"before_captcha_a{_attempt + 1}")
 
-        # Wait for a *fresh* CAPTCHA image (image mime only, and different from previous attempt).
+        # Wait for a *fresh, non-empty* CAPTCHA image.
+        # On retry, the page briefly shows `data:image/jpeg;base64,` (empty payload)
+        # before the new image is filled in; we must skip that placeholder.
         img_src = None
+        _MIN_PAYLOAD_LEN = 500  # any real base64-encoded captcha is much larger
         try:
             page.wait_for_selector('img[src^="data:image"]', state="visible", timeout=15000)
-            # Poll up to ~10s for a NEW image (different data URL than previous attempt).
-            for _ in range(20):
-                _cand = page.locator('img[src^="data:image"]').first.get_attribute("src")
-                if _cand and _cand != _prev_img_src:
+            # Poll up to ~20s for a NEW *and* non-trivial image.
+            for _ in range(40):
+                _cand = page.locator('img[src^="data:image"]').first.get_attribute("src") or ""
+                if (
+                    _cand
+                    and _cand != _prev_img_src
+                    and len(_cand) >= _MIN_PAYLOAD_LEN
+                    and "," in _cand
+                    and len(_cand.split(",", 1)[1]) >= _MIN_PAYLOAD_LEN
+                ):
                     img_src = _cand
                     break
                 page.wait_for_timeout(500)
             if img_src is None:
-                # Give up waiting for a different image; take whatever is there.
-                img_src = page.locator('img[src^="data:image"]').first.get_attribute("src")
+                _cand = page.locator('img[src^="data:image"]').first.get_attribute("src") or ""
+                log(f"captcha image never became fresh (final len={len(_cand)})")
+                # Only accept the final candidate if it has a real payload.
+                if _cand and "," in _cand and len(_cand.split(",", 1)[1]) >= _MIN_PAYLOAD_LEN:
+                    img_src = _cand
         except Exception as _we:
             log(f"captcha image wait failed: {_we}")
-            img_src = page.locator('img[src^="data:image"]').first.get_attribute("src") or \
-                       page.locator('img[src^="data:"]').first.get_attribute("src")
+            _cand = page.locator('img[src^="data:image"]').first.get_attribute("src") or ""
+            if _cand and "," in _cand and len(_cand.split(",", 1)[1]) >= _MIN_PAYLOAD_LEN:
+                img_src = _cand
 
         if img_src:
             log(f"captcha found (len={len(img_src)}, head={img_src[:40]!r}), trying local model first")
