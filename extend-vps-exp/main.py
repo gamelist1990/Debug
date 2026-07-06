@@ -152,26 +152,20 @@ def _wait_and_click(locator, timeout_ms: int = 60_000, interval_ms: int = 500) -
     raise TimeoutError(f"element did not become clickable within {timeout_ms}ms")
 
 
-def _wait_for_cf_token(page, timeout_s: int = 60) -> bool:
-    """Poll ``input[name=cf-turnstile-response]`` for a non-empty token.
+def _sleep_for_cf(seconds: float) -> None:
+    """Passively wait for Cloudflare Turnstile to resolve itself.
 
-    CloakBrowser's stealth Chromium usually clears Turnstile automatically
-    within a few seconds. Returns True once populated, False on timeout.
+    We deliberately do NOT poll ``input[name=cf-turnstile-response]`` via
+    ``page.evaluate()``. Each evaluate() call fires CDP traffic that CF's
+    behavioural analysis picks up as an "automation signal" — that appears
+    to be what tanked our siteverify score last run (token acquired in
+    211ms but rejected on submit).
+
+    CloakBrowser's stealth Chromium normally resolves the non-interactive
+    Turnstile challenge within ~3–5s. Just sleep for a generous window,
+    keep our CDP footprint at zero, and let the browser do its thing.
     """
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        try:
-            token = page.evaluate(
-                "() => { const els = document.querySelectorAll('input[name=\"cf-turnstile-response\"]');"
-                "  for (const e of els) { if (e.value && e.value.length > 20) return e.value; }"
-                "  return ''; }"
-            ) or ""
-            if len(token) > 20:
-                return True
-        except Exception:
-            pass
-        time.sleep(0.5)
-    return False
+    time.sleep(seconds)
 
 
 def _solve_captcha(page) -> Optional[str]:
@@ -312,19 +306,15 @@ def run_renewal(page, cap: FrameCapture) -> bool:
     cap.snap(page, "captcha_filled")
 
     # ---- Cloudflare Turnstile (CloakBrowser handles it natively) ----
-    log("waiting for Cloudflare Turnstile token (CloakBrowser)…")
+    # Passive wait, no CDP polling. CF's behavioural analysis flags
+    # frequent DOM inspection via CDP as an automation signal — polling
+    # for the token caused our previous siteverify rejections despite the
+    # token being populated within 200ms. A plain sleep keeps the CDP
+    # channel silent while the stealth binary lets Turnstile settle.
+    log("passively waiting ~12s for Cloudflare Turnstile to settle…")
     cap.snap(page, "cf_waiting")
-    if _wait_for_cf_token(page, timeout_s=60):
-        log("cf token acquired")
-        # Give CF time to finalize the token server-side. When the token is
-        # populated almost instantly, CF may still be running background
-        # validation; submitting too fast gets a "non-interactive challenge
-        # not yet trusted" verdict from siteverify. 5s empirically works.
-        time.sleep(5)
-        cap.snap(page, "cf_done")
-    else:
-        log("[WARN] cf token did not populate — trying submit anyway")
-        cap.snap(page, "cf_timeout")
+    _sleep_for_cf(12.0)
+    cap.snap(page, "cf_done")
 
     # ---- Submit ----
     # Small random pre-click delay so submit doesn't fire on a suspiciously
