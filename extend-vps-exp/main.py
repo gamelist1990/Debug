@@ -45,11 +45,9 @@ LOGIN_URL = "https://secure.xserver.ne.jp/xapanel/login/xvps/"
 
 
 class DebugCapture:
-    # Live-frame settings (always on; independent of DEBUG_VIDEO).
-    # A background thread overwrites frames/live.png every LIVE_INTERVAL_S
-    # seconds so operators can watch progress in real time.
-    LIVE_INTERVAL_S = 0.5
-    # Always-on frames dir, next to this script.
+    # Live-frame path: overwritten every time capture() is called, plus at the
+    # end of each `wait` step in the flow (via update_live()). Always on;
+    # independent of DEBUG_VIDEO.
     LIVE_DIR = Path(BASE_DIR) / "frames"
     LIVE_PATH = LIVE_DIR / "live.png"
 
@@ -61,69 +59,34 @@ class DebugCapture:
         self.video_path = output_dir / "debug.mp4"
         self.frame_index = 0
         self.started = False
-        # Live-frame worker state (always on).
-        self._live_page: Page | None = None
-        self._live_stop = _threading.Event()
-        self._live_thread: _threading.Thread | None = None
-
-    # ---- Live-frame worker (always on) ----
-    def start_live(self, page: Page):
-        """Start the always-on background live screenshot thread.
-
-        Overwrites the same file (frames/live.png) every 0.5s so it can be
-        tail-viewed (e.g. via a file watcher or `feh --reload`).
-        """
-        if self._live_thread is not None:
-            return
+        # Ensure the always-on frames dir exists early so update_live() works
+        # even before start() is called.
         try:
             self.LIVE_DIR.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
-        self._live_page = page
-        self._live_stop.clear()
-        self._live_thread = _threading.Thread(
-            target=self._live_loop, name="live-capture", daemon=True
-        )
-        self._live_thread.start()
 
-    def _live_loop(self):
-        # Playwright's sync API is not strictly thread-safe, but page.screenshot
-        # via CDP tends to survive concurrent calls. Any error is swallowed so
-        # the main flow keeps running.
-        tmp_path = self.LIVE_DIR / "live.png.tmp"
-        while not self._live_stop.is_set():
-            try:
-                pg = self._live_page
-                if pg is not None:
-                    # Write to a temp path then rename, so readers never see a
-                    # half-written file.
-                    pg.screenshot(path=str(tmp_path), full_page=False)
-                    try:
-                        os.replace(str(tmp_path), str(self.LIVE_PATH))
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            # Wait the interval (interruptible).
-            if self._live_stop.wait(self.LIVE_INTERVAL_S):
-                break
+    # ---- Live frame (always on, called from the main thread only) ----
+    def update_live(self, page: Page):
+        """Overwrite frames/live.png with the current viewport.
 
-    def stop_live(self):
-        self._live_stop.set()
-        t = self._live_thread
-        if t is not None:
-            try:
-                t.join(timeout=2)
-            except Exception:
-                pass
-            self._live_thread = None
-        self._live_page = None
+        Must be called from the same thread that owns `page` (Playwright's
+        sync API is single-threaded). Errors are swallowed so the flow
+        keeps running.
+        """
+        try:
+            # Explicit type="png" so Playwright doesn't try to sniff the
+            # extension. We write directly to live.png (no .tmp rename)
+            # because Playwright rejects unknown extensions.
+            page.screenshot(path=str(self.LIVE_PATH), type="png", full_page=False)
+        except Exception:
+            pass
 
     # ---- Indexed capture (existing behaviour, gated by DEBUG_VIDEO) ----
     def start(self, page: Page | None = None):
-        # Always start the live-frame thread when a page is provided.
+        # Take an immediate live snapshot when we get a page.
         if page is not None:
-            self.start_live(page)
+            self.update_live(page)
 
         if not self.enabled or self.started:
             return
@@ -137,6 +100,9 @@ class DebugCapture:
             f.write(f"{datetime.now().isoformat()} {message}\n")
 
     def capture(self, page: Page, label: str):
+        # Always refresh the live frame, even when DEBUG_VIDEO is off.
+        self.update_live(page)
+
         if not self.enabled or not self.started:
             return
 
@@ -146,8 +112,6 @@ class DebugCapture:
         self._log_event(f"frame={self.frame_index:05d} label={label} path={frame_path.name}")
 
     def finalize(self):
-        # Always stop the live-frame thread on flow exit.
-        self.stop_live()
         if not self.enabled or not self.started:
             return
 
