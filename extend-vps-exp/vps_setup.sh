@@ -86,23 +86,18 @@ install_python312_via_uv() {
   log "python3.12 installed at: $py312"
 }
 
-install_system_packages() {
-  local mgr=$1
-
-  # Base build/network deps.
-  local base=(git python3 python3-pip python3-venv python3-dev build-essential
-              xvfb xdotool ffmpeg curl ca-certificates software-properties-common)
-
-  # Fonts required by CloakBrowser's stealth patches on Linux. Anti-bot sites
-  # hash rendered emoji on canvas; minimal cloud images lack these, producing
-  # hashes that don't match any real browser.
-  #
-  # Japanese CJK: fonts-noto-cjk is the most comprehensive (covers hiragana,
-  # katakana, kanji, punctuation, CJK symbols). Without it, Xserver's Japanese
-  # UI renders as tofu (□) in the screenshot artifacts.
-  # ttf-mscorefonts-installer + fonts-liberation provide real Windows fonts
-  # (Arial/Times/Verdana), suppressing CloakBrowser's "Win fonts: missing"
-  # warning and improving Windows-spoof canvas metrics against FingerprintJS.
+# ------------------------------------------------------------------
+# Fonts (always run on every install — separate from the guarded system
+# package block below, so re-installing after adding new font names
+# actually pulls them in).
+# ------------------------------------------------------------------
+install_fonts_apt() {
+  # Japanese CJK: fonts-noto-cjk is the most comprehensive (hiragana,
+  # katakana, kanji, punctuation, CJK symbols). Without it, Xserver's
+  # Japanese UI renders as tofu (□) in the screenshot artifacts.
+  # ttf-mscorefonts-installer + fonts-liberation give real Windows fonts
+  # (Arial/Times/Verdana), fixing CloakBrowser's "Win fonts: missing" and
+  # improving Windows-spoof canvas metrics against FingerprintJS/CF.
   local fonts=(
     # Latin + emoji + fallback
     fonts-noto-color-emoji fonts-freefont-ttf fonts-unifont fonts-liberation
@@ -110,11 +105,62 @@ install_system_packages() {
     fonts-noto-cjk fonts-noto-cjk-extra
     fonts-ipafont-gothic fonts-ipafont-mincho
     fonts-takao-gothic fonts-takao-mincho
-    # Chinese/Korean fallback (also covers some CJK glyphs Japanese fonts miss)
+    # Chinese/Korean fallback (some CJK glyphs Japanese fonts miss)
     fonts-wqy-zenhei fonts-nanum
     # Windows fonts for CloakBrowser Windows-spoof
     ttf-mscorefonts-installer
   )
+
+  log "ensuring CJK + Windows fonts are installed"
+  # Pre-accept EULA for msttcorefonts (silent installer requirement).
+  echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" \
+    | $SUDO debconf-set-selections 2>/dev/null || true
+
+  # Install one-by-one so a single missing package name (e.g. on a codename
+  # where fonts-noto-cjk-extra doesn't exist) doesn't abort the whole set.
+  local installed=0 missing=0
+  for pkg in "${fonts[@]}"; do
+    if dpkg -s "$pkg" >/dev/null 2>&1; then
+      installed=$((installed + 1))
+      continue
+    fi
+    if $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$pkg" \
+         >/dev/null 2>/tmp/font-$pkg.err; then
+      log "  + $pkg"
+      installed=$((installed + 1))
+    else
+      warn "  ! $pkg not installable on this codename (skipping)"
+      missing=$((missing + 1))
+    fi
+  done
+  log "fonts: $installed installed, $missing missing"
+
+  # Refresh font cache so Chromium picks up newly-installed fonts.
+  if have fc-cache; then
+    log "refreshing font cache (fc-cache -f)"
+    fc-cache -f >/dev/null 2>&1 || true
+  fi
+
+  # Diagnostic: confirm at least one Japanese font is actually visible to
+  # fontconfig. If not, screenshots will still tofu even after apt succeeded.
+  if have fc-list; then
+    local ja_count
+    ja_count=$(fc-list :lang=ja 2>/dev/null | wc -l)
+    if [ "$ja_count" -gt 0 ]; then
+      log "Japanese fonts detected by fontconfig: $ja_count entries"
+    else
+      warn "fontconfig sees 0 Japanese fonts — screenshots will tofu"
+      warn "try manually: sudo apt-get install fonts-noto-cjk && fc-cache -f"
+    fi
+  fi
+}
+
+install_system_packages() {
+  local mgr=$1
+
+  # Base build/network deps.
+  local base=(git python3 python3-pip python3-venv python3-dev build-essential
+              xvfb xdotool ffmpeg curl ca-certificates software-properties-common)
 
   # Chromium runtime libraries — CloakBrowser bundles the binary but not the
   # system .so files. Names cover both Ubuntu 22.04 (pre-t64) and 24.04+ (t64).
@@ -134,15 +180,6 @@ install_system_packages() {
         warn "apt-get update had errors (broken third-party repo?); continuing"
 
       $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${base[@]}"
-
-      # ttf-mscorefonts-installer needs a EULA prompt; pre-accept it.
-      echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" \
-        | $SUDO debconf-set-selections 2>/dev/null || true
-      # Fonts are best-effort — older Ubuntu may lack some package names.
-      $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${fonts[@]}" || \
-        warn "some font packages missing (older Ubuntu codename)"
-      # Refresh font cache so newly-installed msttcorefonts are discovered.
-      have fc-cache && fc-cache -f >/dev/null 2>&1 || true
 
       # Chromium libs — install individually, tolerate misses (t64 vs pre-t64).
       for lib in "${chromium_libs[@]}"; do
@@ -212,6 +249,11 @@ do_install() {
     install_system_packages "$mgr"
   else
     log "system packages already present"
+  fi
+
+  # ---- Fonts (always run — new packages get picked up on re-install) ----
+  if [ "$mgr" = "apt" ]; then
+    install_fonts_apt
   fi
 
   # ---- Repo checkout ----
