@@ -73,7 +73,11 @@ detect_pkg_mgr() {
 install_system_packages() {
   local mgr=$1
   # Package name mapping (Debian names as base).
-  local pkgs=(git python3 python3-pip python3-venv xvfb xdotool ffmpeg curl ca-certificates)
+  # build-essential is a fallback in case pip has to build a wheel from source
+  # (typically only happens when the running Python is too new for the pinned
+  # numpy/tensorflow release).
+  local pkgs=(git python3 python3-pip python3-venv python3-dev build-essential \
+              xvfb xdotool ffmpeg curl ca-certificates)
   case "$mgr" in
     apt)
       # Third-party PPAs (e.g. packagecloud speedtest-cli with invalid codename)
@@ -155,15 +159,31 @@ do_install() {
   python -m pip install --quiet --upgrade pip
 
   # ---- 4. Python packages ----
-  # tensorflow-cpu has wheels for both x86_64 and aarch64 Linux since 2.16.
-  # If it fails on aarch64 for the pinned version, we fall back to the latest.
+  # We try progressively looser constraints so it works on both mature
+  # (Ubuntu 22.04 / Python 3.11) and very fresh (Ubuntu 26.04 / Python 3.13)
+  # systems. On very fresh Python where TF doesn't ship wheels yet, pip would
+  # try to build numpy from source. build-essential (installed above) covers
+  # that case, but it's slow, so we first try binary-only.
   log "Installing Python packages (may take several minutes)..."
-  if ! pip install --quiet \
-        "scrapling[fetchers]" playwright pillow "numpy<2.2" \
-        "tensorflow-cpu==${TF_VERSION}"; then
-    warn "Pinned tensorflow-cpu==${TF_VERSION} unavailable for this platform."
-    warn "Falling back to latest tensorflow-cpu."
-    pip install --quiet "scrapling[fetchers]" playwright pillow "numpy<2.2" tensorflow-cpu
+  local py_ver
+  py_ver=$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+  log "Python: $py_ver"
+
+  # Attempt 1: pinned TF, binary-only (fast path, works on 3.10-3.12).
+  if pip install --quiet --only-binary=:all: \
+        "scrapling[fetchers]" playwright pillow \
+        "tensorflow-cpu==${TF_VERSION}" 2>/tmp/pip1.err; then
+    log "Installed with pinned tensorflow-cpu==${TF_VERSION}"
+  # Attempt 2: latest TF, binary-only (works when TF has a fresh wheel).
+  elif pip install --quiet --only-binary=:all: \
+        "scrapling[fetchers]" playwright pillow tensorflow-cpu 2>/tmp/pip2.err; then
+    log "Installed with latest tensorflow-cpu (binary wheel)"
+  # Attempt 3: latest TF, allow source builds (works on very new Python
+  # where TF has no wheel yet; requires build-essential + python3-dev,
+  # which we already installed above via apt).
+  else
+    warn "No binary wheels found; falling back to source build (slow)..."
+    pip install "scrapling[fetchers]" playwright pillow tensorflow-cpu
   fi
 
   # ---- 5. Playwright browsers ----
