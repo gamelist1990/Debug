@@ -85,8 +85,8 @@ def build_phase1_scenario(email: str, password: str) -> list:
         "  const tick = () => {"
         "    const el = document.querySelector('input[name=\"cf-turnstile-response\"]');"
         "    if (el && el.value && el.value.length > 20) return r();"
-        "    if (Date.now() - t0 > 25000) return r();"
-        "    setTimeout(tick, 500);"
+        "    if (Date.now() - t0 > 10000) return r();"
+        "    setTimeout(tick, 400);"
         "  };"
         "  tick();"
         "});"
@@ -123,21 +123,21 @@ def build_phase1_scenario(email: str, password: str) -> list:
         {"fill": {"selector": "#memberid", "value": email}},
         {"fill": {"selector": "#user_password", "value": password}},
         {"click": {"selector": "button:has-text('\u30ed\u30b0\u30a4\u30f3\u3059\u308b'), input[value='\u30ed\u30b0\u30a4\u30f3\u3059\u308b']"}},
-        {"wait_for_navigation": {"timeout": 10000}},
+        {"wait_for_navigation": {"timeout": 5000}},
 
         # --- キャンペーンモーダルを閉じる ---
         {"execute": {"script": modal_dismiss}},
 
         # --- 契約情報ページへ ---
         {"click": {"selector": ".contract__menu"}},
-        {"wait": 500},
+        {"wait": 300},
         {"click": {"selector": "a:has-text('\u5951\u7d04\u60c5\u5831')"}},
-        {"wait_for_navigation": {"timeout": 10000}},
+        {"wait_for_navigation": {"timeout": 5000}},
 
         # --- 更新する ---
-        {"wait_for_selector": {"selector": "text=\u66f4\u65b0\u3059\u308b", "timeout": 15000}},
+        {"wait_for_selector": {"selector": "text=\u66f4\u65b0\u3059\u308b", "timeout": 8000}},
         {"click": {"selector": "text=\u66f4\u65b0\u3059\u308b"}},
-        {"wait_for_navigation": {"timeout": 10000}},
+        {"wait_for_navigation": {"timeout": 5000}},
 
         # --- 引き続き無料VPSの利用を継続する ---
         {"wait_for_selector": {"selector": "text=\u5f15\u304d\u7d9a\u304d\u7121\u6599VPS\u306e\u5229\u7528\u3092\u7d99\u7d9a\u3059\u308b", "timeout": 15000}},
@@ -145,10 +145,11 @@ def build_phase1_scenario(email: str, password: str) -> list:
 
         # --- CAPTCHA 画像と Turnstile の両方が揃うのを待つ ---
         # ※ Scrapfly の wait_for_selector は最大 15s。足りなければ wait を足して待つ。
-        {"wait_for_selector": {"selector": "img[src^='data:image']", "timeout": 15000}},
-        {"wait": 2000},
+        # ※ シナリオ全体の 45s 上限に収めるためタイトに設定。
+        {"wait_for_selector": {"selector": "img[src^='data:image']", "timeout": 8000}},
+        {"wait": 500},
         {"execute": {"script": wait_turnstile}},
-        {"wait": 1500},
+        {"wait": 500},
 
         # --- 必要情報を JS で一括抽出 ---
         # Scrapfly に `evaluate` ステップは存在せず、JS 実行と戻り値取得は
