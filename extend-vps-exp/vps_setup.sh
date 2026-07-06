@@ -85,7 +85,9 @@ install_system_packages() {
         warn "$(tail -n 3 /tmp/apt-update.err)"
         warn "Continuing; install step will fail if base packages are unreachable."
       fi
-      $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${pkgs[@]}"
+      # Use `env` so the env-var-prefix syntax works regardless of whether
+      # $SUDO expands to empty (root) or to `sudo` (non-root).
+      $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${pkgs[@]}"
       ;;
     dnf|yum)
       # Fedora/RHEL: python3-venv is bundled with python3; xvfb is xorg-x11-server-Xvfb.
