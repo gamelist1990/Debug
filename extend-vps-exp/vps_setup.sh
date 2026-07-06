@@ -70,39 +70,41 @@ detect_pkg_mgr() {
   echo unknown
 }
 
-# Fallback installer: portable, static-linked Python 3.12 from
-# python-build-standalone (used by uv, ruff, etc.). Extracts to /opt/python-3.12
-# and symlinks `python3.12` into /usr/local/bin.
-# This works even on brand-new Ubuntu releases where no PPA has caught up.
-install_python312_standalone() {
-  local arch tag url tmp
-  arch=$(uname -m)
-  # See https://github.com/astral-sh/python-build-standalone/releases
-  # We pin a known-good release tag to avoid API rate-limit surprises.
-  tag="20241016"
-  case "$arch" in
-    x86_64|amd64)
-      url="https://github.com/astral-sh/python-build-standalone/releases/download/${tag}/cpython-3.12.7+${tag}-x86_64-unknown-linux-gnu-install_only.tar.gz"
-      ;;
-    aarch64|arm64)
-      url="https://github.com/astral-sh/python-build-standalone/releases/download/${tag}/cpython-3.12.7+${tag}-aarch64-unknown-linux-gnu-install_only.tar.gz"
-      ;;
-    *)
-      error "install_python312_standalone: unsupported arch $arch"
-      exit 1
-      ;;
-  esac
+# Fallback installer: install `uv` (astral-sh/uv) and use it to manage a
+# self-contained Python 3.12 runtime. This is much more robust than raw
+# python-build-standalone tarballs (uv handles the relocation properly and
+# venv creation just works).
+# The resulting python3.12 is symlinked into /usr/local/bin so the rest of
+# the script can find it via the normal PATH lookup.
+install_python312_via_uv() {
+  local uv_bin="$HOME/.local/bin/uv"
+  if [ ! -x "$uv_bin" ] && ! have uv; then
+    log "Installing uv (Python version manager) from astral.sh..."
+    # Official installer: static binary, no dependencies.
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+  fi
+  # `uv` typically installs into ~/.local/bin; make it available now.
+  export PATH="$HOME/.local/bin:$PATH"
 
-  tmp=$(mktemp -d)
-  log "Downloading portable Python 3.12 from python-build-standalone (${arch})..."
-  curl -fsSL "$url" -o "$tmp/py312.tar.gz"
-  $SUDO mkdir -p /opt
-  $SUDO rm -rf /opt/python-3.12
-  $SUDO tar -xzf "$tmp/py312.tar.gz" -C /opt
-  $SUDO mv /opt/python /opt/python-3.12
-  $SUDO ln -sf /opt/python-3.12/bin/python3.12 /usr/local/bin/python3.12
-  rm -rf "$tmp"
-  log "python3.12 installed at /opt/python-3.12 (symlinked to /usr/local/bin/python3.12)"
+  if ! have uv; then
+    error "uv installation failed; cannot obtain a Python 3.12 runtime."
+    exit 1
+  fi
+
+  log "Installing Python 3.12 via uv..."
+  uv python install 3.12
+
+  # Ask uv where the 3.12 binary lives, then symlink it into /usr/local/bin
+  # so the rest of the script can use `python3.12` normally.
+  local py312_path
+  py312_path=$(uv python find 3.12 2>/dev/null || true)
+  if [ -z "$py312_path" ] || [ ! -x "$py312_path" ]; then
+    error "uv reported success but no 3.12 executable found."
+    exit 1
+  fi
+  $SUDO ln -sf "$py312_path" /usr/local/bin/python3.12
+  log "python3.12 installed via uv at: $py312_path"
+  log "symlinked to /usr/local/bin/python3.12"
 }
 
 install_system_packages() {
@@ -148,8 +150,8 @@ install_system_packages() {
           log "python3.12 installed from Deadsnakes PPA"
         else
           warn "Deadsnakes PPA did not provide python3.12 for this Ubuntu codename."
-          warn "Falling back to python-build-standalone portable binary..."
-          install_python312_standalone
+          warn "Falling back to uv-managed Python 3.12..."
+          install_python312_via_uv
         fi
       fi
       ;;
@@ -181,17 +183,40 @@ do_install() {
   log "Package manager: $mgr"
   log "Install dir: $INSTALL_DIR"
 
-  # ---- 1. System packages ----
+  # ---- 1. Clean up any broken standalone Python from a previous run ----
+  # The old python-build-standalone tarball hardcodes sys.base_prefix=/install
+  # and cannot be relocated. If it's still around from an earlier failed run,
+  # remove it so we don't accidentally use it.
+  if [ -e /opt/python-3.12 ] || [ -L /usr/local/bin/python3.12 ]; then
+    if [ -L /usr/local/bin/python3.12 ]; then
+      local link_target
+      link_target=$(readlink /usr/local/bin/python3.12 || true)
+      case "$link_target" in
+        /opt/python-3.12/*)
+          log "Removing broken standalone Python 3.12 install (from previous run)"
+          $SUDO rm -f /usr/local/bin/python3.12
+          $SUDO rm -rf /opt/python-3.12
+          ;;
+      esac
+    fi
+  fi
+
+  # ---- 2. System packages ----
   # Check both commands (git/xvfb/etc) AND critical apt packages that don't
   # install their own /usr/bin binary (build-essential, python3-dev,
-  # python3.12) that we discover only via dpkg.
+  # python3.12) that we discover only via dpkg. Also, if python3.12 exists
+  # as a command but can't actually run (broken standalone install),
+  # force reinstall.
   local need=0
   for cmd in git python3 Xvfb xdotool ffmpeg curl gcc; do
     if ! have "$cmd"; then need=1; break; fi
   done
   if [ "$need" -eq 0 ] && [ "$mgr" = "apt" ]; then
-    # gcc is present but check python3.12 too (needed for TF compatibility).
-    if ! have python3.12; then need=1; fi
+    # Check python3.12 exists AND can actually execute (not a broken symlink
+    # or unrelocatable standalone build).
+    if ! have python3.12 || ! python3.12 -c 'import sys' >/dev/null 2>&1; then
+      need=1
+    fi
     # And python3-dev headers so pip source builds succeed.
     if ! dpkg -s python3-dev >/dev/null 2>&1; then need=1; fi
   fi
