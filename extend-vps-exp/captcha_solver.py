@@ -1,19 +1,26 @@
 """Local Xserver CAPTCHA solver using the bundled Keras model.
 
-Model: repo-root/xserver_captcha.keras
+Model: repo-root/xserver_captcha.keras (from GitHub30/captcha-cloudrun)
   Input : (60, 300, 3) RGB, values in [0, 1]
   Output: (19, 11)   softmax over 10 digits + 1 CTC blank
 
-We do a simple CTC greedy decode: argmax per timestep,
-remove consecutive duplicates, then remove the blank class.
+This implementation mirrors the reference upstream at
+https://github.com/GitHub30/captcha-cloudrun/blob/main/main.py so that our
+local prediction produces the same digits as the (formerly used) cloudrun
+endpoint. Key details:
 
-Blank convention here: class index == 10 (last class, num_classes - 1),
-which is the standard convention for CTC in Keras.
+  1. Use tf.image.decode_png (not decode_jpeg). The Xserver CAPTCHA bytes
+     always start with the PNG magic number `\x89PNG\r\n\x1a\n`
+     ("iVBORw..." in base64) even though the data URL is labelled
+     `image/jpeg`. Decoding with the correct codec matters for accuracy.
+  2. Use tf.image.resize with [60, 300] (height, width) so the resize
+     kernel matches the one used during training (bilinear via TF).
+  3. Use tf.keras.backend.ctc_decode(preds, ..., greedy=True) for the
+     standard CTC greedy decode. Blank tokens are returned as -1 by that
+     op, so we filter with `c >= 0` (do NOT hardcode blank = num_classes-1).
 """
 from __future__ import annotations
 
-import base64
-import io
 import logging
 import os
 import re
@@ -24,7 +31,6 @@ log = logging.getLogger(__name__).info
 
 _MODEL_LOCK = threading.Lock()
 _MODEL = None
-_BLANK_INDEX = 10  # last class in an 11-way softmax
 
 
 def _default_model_path() -> str:
@@ -65,63 +71,66 @@ def _load_model():
     return _MODEL
 
 
-def _decode_data_url(data_url: str) -> bytes:
-    """Accept either a raw base64 payload or a 'data:image/...;base64,XXX' URL."""
-    m = re.match(r"^data:([^;]+);base64,(.*)$", data_url.strip(), flags=re.DOTALL)
+def _extract_b64_payload(data_url_or_b64: str) -> str:
+    """Return just the base64 payload from either a full data URL or raw b64."""
+    s = data_url_or_b64.strip()
+    m = re.match(r"^data:[^;]+;base64,(.*)$", s, flags=re.DOTALL)
     if m:
-        return base64.b64decode(m.group(2))
-    # Fallback: assume the whole string is base64.
-    return base64.b64decode(data_url)
-
-
-def _prepare_image(image_bytes: bytes):
-    from PIL import Image  # type: ignore
-    import numpy as np  # type: ignore
-
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    # Model expects 60 (H) x 300 (W) x 3.
-    img = img.resize((300, 60), Image.BILINEAR)
-    arr = np.asarray(img, dtype="float32") / 255.0
-    arr = arr.reshape(1, 60, 300, 3)
-    return arr
-
-
-def _ctc_greedy_decode(probs) -> str:
-    """probs: shape (T, C). Return decoded digit string."""
-    import numpy as np  # type: ignore
-
-    best = np.argmax(probs, axis=-1)  # (T,)
-    out = []
-    prev = -1
-    for k in best.tolist():
-        if k != prev and k != _BLANK_INDEX:
-            out.append(str(k))
-        prev = k
-    return "".join(out)
+        return m.group(1)
+    return s
 
 
 def solve(data_url_or_b64: str) -> Optional[str]:
-    """Solve a data-URL captcha image locally. Returns digit string or None on failure."""
+    """Solve a data-URL CAPTCHA image locally.
+
+    Returns the decoded digit string, or None on any failure.
+    """
     try:
-        image_bytes = _decode_data_url(data_url_or_b64)
+        payload = _extract_b64_payload(data_url_or_b64)
     except Exception as e:
-        log(f"[captcha_solver] base64 decode failed: {e}")
+        log(f"[captcha_solver] payload extract failed: {e}")
         return None
-    try:
-        arr = _prepare_image(image_bytes)
-    except Exception as e:
-        log(f"[captcha_solver] image prep failed: {e}")
-        return None
+
     try:
         model = _load_model()
     except Exception as e:
         log(f"[captcha_solver] model load failed: {e}")
         return None
+
     try:
-        # Model output shape: (1, 19, 11)
-        probs = model.predict(arr, verbose=0)[0]
-        text = _ctc_greedy_decode(probs)
-        return text or None
+        import tensorflow as tf  # type: ignore
+
+        # tf.io.decode_base64 requires URL-safe base64 (- and _ instead of + /).
+        url_safe = payload.translate(str.maketrans({"+": "-", "/": "_"}))
+        raw = tf.io.decode_base64(url_safe)
+        # Bytes are actually PNG even though the data URL says image/jpeg.
+        img = tf.image.decode_png(raw, channels=3)
+        img = tf.image.resize(img, [60, 300]) / 255.0
+        batch = tf.expand_dims(img, 0)  # (1, 60, 300, 3)
+
+        preds = model(batch)  # (1, 19, 11)
+
+        # Prefer the classic tf.keras.backend.ctc_decode (matches reference impl).
+        try:
+            input_len = tf.fill([tf.shape(preds)[0]], tf.shape(preds)[1])
+            decoded = tf.keras.backend.ctc_decode(
+                preds, input_length=input_len, greedy=True
+            )[0][0]
+            code = "".join(str(int(c)) for c in decoded.numpy()[0] if int(c) >= 0)
+        except Exception as _cd_err:
+            # Fallback for Keras 3 environments where backend.ctc_decode is missing.
+            log(f"[captcha_solver] backend.ctc_decode unavailable ({_cd_err}); falling back to tf.nn.ctc_greedy_decoder")
+            # tf.nn.ctc_greedy_decoder expects (T, B, C).
+            logits = tf.transpose(preds, [1, 0, 2])
+            seq_len = tf.fill([tf.shape(logits)[1]], tf.shape(logits)[0])
+            sparse, _ = tf.nn.ctc_greedy_decoder(
+                inputs=tf.math.log(tf.maximum(logits, 1e-12)),
+                sequence_length=seq_len,
+            )
+            dense = tf.sparse.to_dense(sparse[0], default_value=-1).numpy()
+            code = "".join(str(int(c)) for c in dense[0] if int(c) >= 0)
+
+        return code or None
     except Exception as e:
         log(f"[captcha_solver] inference failed: {e}")
         return None
