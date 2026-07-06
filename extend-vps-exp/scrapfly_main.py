@@ -85,7 +85,7 @@ def build_phase1_scenario(email: str, password: str) -> list:
         "  const tick = () => {"
         "    const el = document.querySelector('input[name=\"cf-turnstile-response\"]');"
         "    if (el && el.value && el.value.length > 20) return r();"
-        "    if (Date.now() - t0 > 40000) return r();"
+        "    if (Date.now() - t0 > 25000) return r();"
         "    setTimeout(tick, 500);"
         "  };"
         "  tick();"
@@ -123,7 +123,7 @@ def build_phase1_scenario(email: str, password: str) -> list:
         {"fill": {"selector": "#memberid", "value": email}},
         {"fill": {"selector": "#user_password", "value": password}},
         {"click": {"selector": "button:has-text('\u30ed\u30b0\u30a4\u30f3\u3059\u308b'), input[value='\u30ed\u30b0\u30a4\u30f3\u3059\u308b']"}},
-        {"wait_for_navigation": {"timeout": 20000}},
+        {"wait_for_navigation": {"timeout": 10000}},
 
         # --- キャンペーンモーダルを閉じる ---
         {"execute": {"script": modal_dismiss}},
@@ -132,12 +132,12 @@ def build_phase1_scenario(email: str, password: str) -> list:
         {"click": {"selector": ".contract__menu"}},
         {"wait": 500},
         {"click": {"selector": "a:has-text('\u5951\u7d04\u60c5\u5831')"}},
-        {"wait_for_navigation": {"timeout": 20000}},
+        {"wait_for_navigation": {"timeout": 10000}},
 
         # --- 更新する ---
         {"wait_for_selector": {"selector": "text=\u66f4\u65b0\u3059\u308b", "timeout": 15000}},
         {"click": {"selector": "text=\u66f4\u65b0\u3059\u308b"}},
-        {"wait_for_navigation": {"timeout": 20000}},
+        {"wait_for_navigation": {"timeout": 10000}},
 
         # --- 引き続き無料VPSの利用を継続する ---
         {"wait_for_selector": {"selector": "text=\u5f15\u304d\u7d9a\u304d\u7121\u6599VPS\u306e\u5229\u7528\u3092\u7d99\u7d9a\u3059\u308b", "timeout": 15000}},
