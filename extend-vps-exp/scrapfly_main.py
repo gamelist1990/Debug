@@ -117,12 +117,23 @@ def build_phase1_scenario(email: str, password: str) -> list:
         "})()"
     )
 
+    # ※ Scrapfly の click セレクタは純粋な CSS のみ。Playwright 拡張 :has-text() / text= は
+    # 使えないので、テキスト検索で例クリックは execute (JS) で実行する。
+    click_by_text = (
+        "const t = {text}; "
+        "const els = Array.from(document.querySelectorAll('a, button, input, span, div')); "
+        "const el = els.find(e => (e.innerText || e.value || '').includes(t)); "
+        "if (!el) throw new Error('text not found: ' + t); "
+        "el.click();"
+    )
+
     return [
         # --- ログインフォーム ---
         {"wait_for_selector": {"selector": "#memberid", "timeout": 15000}},
         {"fill": {"selector": "#memberid", "value": email}},
         {"fill": {"selector": "#user_password", "value": password}},
-        {"click": {"selector": "button:has-text('\u30ed\u30b0\u30a4\u30f3\u3059\u308b'), input[value='\u30ed\u30b0\u30a4\u30f3\u3059\u308b']"}},
+        # ※ ログインボタンは form submit で確実に送信する
+        {"execute": {"script": "const f = document.querySelector('form'); if (!f) throw new Error('login form not found'); f.submit();"}},
         {"wait_for_navigation": {"timeout": 5000}},
 
         # --- キャンペーンモーダルを閉じる ---
@@ -131,17 +142,17 @@ def build_phase1_scenario(email: str, password: str) -> list:
         # --- 契約情報ページへ ---
         {"click": {"selector": ".contract__menu"}},
         {"wait": 300},
-        {"click": {"selector": "a:has-text('\u5951\u7d04\u60c5\u5831')"}},
+        {"execute": {"script": click_by_text.replace("{text}", "'\u5951\u7d04\u60c5\u5831'")}},
         {"wait_for_navigation": {"timeout": 5000}},
 
         # --- 更新する ---
-        {"wait_for_selector": {"selector": "text=\u66f4\u65b0\u3059\u308b", "timeout": 8000}},
-        {"click": {"selector": "text=\u66f4\u65b0\u3059\u308b"}},
+        {"wait": 500},
+        {"execute": {"script": click_by_text.replace("{text}", "'\u66f4\u65b0\u3059\u308b'")}},
         {"wait_for_navigation": {"timeout": 5000}},
 
         # --- 引き続き無料VPSの利用を継続する ---
-        {"wait_for_selector": {"selector": "text=\u5f15\u304d\u7d9a\u304d\u7121\u6599VPS\u306e\u5229\u7528\u3092\u7d99\u7d9a\u3059\u308b", "timeout": 15000}},
-        {"click": {"selector": "text=\u5f15\u304d\u7d9a\u304d\u7121\u6599VPS\u306e\u5229\u7528\u3092\u7d99\u7d9a\u3059\u308b"}},
+        {"wait": 500},
+        {"execute": {"script": click_by_text.replace("{text}", "'\u5f15\u304d\u7d9a\u304d\u7121\u6599VPS\u306e\u5229\u7528\u3092\u7d99\u7d9a\u3059\u308b'")}},
 
         # --- CAPTCHA 画像と Turnstile の両方が揃うのを待つ ---
         # ※ Scrapfly の wait_for_selector は最大 15s。足りなければ wait を足して待つ。
