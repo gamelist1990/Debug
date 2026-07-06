@@ -76,7 +76,15 @@ install_system_packages() {
   local pkgs=(git python3 python3-pip python3-venv xvfb xdotool ffmpeg curl ca-certificates)
   case "$mgr" in
     apt)
-      $SUDO apt-get update -qq
+      # Third-party PPAs (e.g. packagecloud speedtest-cli with invalid codename)
+      # may return non-zero from `apt-get update`. We tolerate that as long as
+      # the main Ubuntu/Debian archives still refresh, since the actual install
+      # step below will fail loudly if any of our packages are truly missing.
+      if ! $SUDO apt-get update -qq 2>/tmp/apt-update.err; then
+        warn "apt-get update had errors (some third-party repos may be broken):"
+        warn "$(tail -n 3 /tmp/apt-update.err)"
+        warn "Continuing; install step will fail if base packages are unreachable."
+      fi
       $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${pkgs[@]}"
       ;;
     dnf|yum)
