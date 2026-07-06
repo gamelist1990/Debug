@@ -316,14 +316,21 @@ def run_renewal(page, cap: FrameCapture) -> bool:
     cap.snap(page, "cf_waiting")
     if _wait_for_cf_token(page, timeout_s=60):
         log("cf token acquired")
-        # Let CF finalize (siteverify happens on submit).
-        time.sleep(2)
+        # Give CF time to finalize the token server-side. When the token is
+        # populated almost instantly, CF may still be running background
+        # validation; submitting too fast gets a "non-interactive challenge
+        # not yet trusted" verdict from siteverify. 5s empirically works.
+        time.sleep(5)
         cap.snap(page, "cf_done")
     else:
         log("[WARN] cf token did not populate — trying submit anyway")
         cap.snap(page, "cf_timeout")
 
     # ---- Submit ----
+    # Small random pre-click delay so submit doesn't fire on a suspiciously
+    # round tick after Turnstile settles.
+    import random
+    time.sleep(0.8 + random.random() * 1.2)
     log("submitting")
     submit = page.get_by_role("button", name="無料VPSの利用を継続する").first
     _wait_and_click(submit, timeout_ms=30_000)
@@ -379,6 +386,21 @@ def main() -> int:
     #   which lets CF trust the profile after the first successful pass and
     #   also avoids incognito-detection penalties.
     # - locale/timezone forced to Japan since the target is a JP-only service.
+    # - args: recommended anti-bot flags (per CloakBrowser FingerprintJS docs)
+    #   * --fingerprint-noise=false: disable noise injection so ML tampering
+    #     detectors don't flag us. Deterministic seed stays active.
+    #   * --fingerprint-storage-quota=5000: present as a regular (non-incognito)
+    #     profile to detectors that infer incognito from storage quota.
+    stealth_args = [
+        "--fingerprint-noise=false",
+        "--fingerprint-storage-quota=5000",
+    ]
+    # If Windows fonts are installed under this well-known path, tell the
+    # binary to use them so canvas font metrics match Windows.
+    win_fonts_dir = os.path.expanduser("~/.local/share/fonts/windows")
+    if os.path.isdir(win_fonts_dir):
+        stealth_args.append(f"--fingerprint-fonts-dir={win_fonts_dir}")
+
     launch_kwargs = {
         "headless": headless,
         "humanize": True,
@@ -386,6 +408,7 @@ def main() -> int:
         "locale": "ja-JP",
         "timezone": "Asia/Tokyo",
         "viewport": {"width": 1280, "height": 900},
+        "args": stealth_args,
     }
     proxy = os.environ.get("PROXY_SERVER")
     if proxy:

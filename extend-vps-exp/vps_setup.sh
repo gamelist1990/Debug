@@ -96,8 +96,25 @@ install_system_packages() {
   # Fonts required by CloakBrowser's stealth patches on Linux. Anti-bot sites
   # hash rendered emoji on canvas; minimal cloud images lack these, producing
   # hashes that don't match any real browser.
-  local fonts=(fonts-noto-color-emoji fonts-freefont-ttf fonts-unifont
-               fonts-ipafont-gothic fonts-wqy-zenhei)
+  #
+  # Japanese CJK: fonts-noto-cjk is the most comprehensive (covers hiragana,
+  # katakana, kanji, punctuation, CJK symbols). Without it, Xserver's Japanese
+  # UI renders as tofu (□) in the screenshot artifacts.
+  # ttf-mscorefonts-installer + fonts-liberation provide real Windows fonts
+  # (Arial/Times/Verdana), suppressing CloakBrowser's "Win fonts: missing"
+  # warning and improving Windows-spoof canvas metrics against FingerprintJS.
+  local fonts=(
+    # Latin + emoji + fallback
+    fonts-noto-color-emoji fonts-freefont-ttf fonts-unifont fonts-liberation
+    # Japanese (CJK) — critical for Xserver UI rendering
+    fonts-noto-cjk fonts-noto-cjk-extra
+    fonts-ipafont-gothic fonts-ipafont-mincho
+    fonts-takao-gothic fonts-takao-mincho
+    # Chinese/Korean fallback (also covers some CJK glyphs Japanese fonts miss)
+    fonts-wqy-zenhei fonts-nanum
+    # Windows fonts for CloakBrowser Windows-spoof
+    ttf-mscorefonts-installer
+  )
 
   # Chromium runtime libraries — CloakBrowser bundles the binary but not the
   # system .so files. Names cover both Ubuntu 22.04 (pre-t64) and 24.04+ (t64).
@@ -118,9 +135,14 @@ install_system_packages() {
 
       $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${base[@]}"
 
+      # ttf-mscorefonts-installer needs a EULA prompt; pre-accept it.
+      echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" \
+        | $SUDO debconf-set-selections 2>/dev/null || true
       # Fonts are best-effort — older Ubuntu may lack some package names.
       $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${fonts[@]}" || \
         warn "some font packages missing (older Ubuntu codename)"
+      # Refresh font cache so newly-installed msttcorefonts are discovered.
+      have fc-cache && fc-cache -f >/dev/null 2>&1 || true
 
       # Chromium libs — install individually, tolerate misses (t64 vs pre-t64).
       for lib in "${chromium_libs[@]}"; do
