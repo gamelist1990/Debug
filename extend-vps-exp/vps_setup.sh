@@ -76,8 +76,11 @@ install_system_packages() {
   # build-essential is a fallback in case pip has to build a wheel from source
   # (typically only happens when the running Python is too new for the pinned
   # numpy/tensorflow release).
+  # python3.12 is required as a fallback runtime because TensorFlow does not
+  # yet ship wheels for Python 3.13+ (Ubuntu 26.04 uses 3.14 by default).
   local pkgs=(git python3 python3-pip python3-venv python3-dev build-essential \
-              xvfb xdotool ffmpeg curl ca-certificates)
+              python3.12 python3.12-venv python3.12-dev \
+              xvfb xdotool ffmpeg curl ca-certificates software-properties-common)
   case "$mgr" in
     apt)
       # Third-party PPAs (e.g. packagecloud speedtest-cli with invalid codename)
@@ -122,10 +125,19 @@ do_install() {
   log "Install dir: $INSTALL_DIR"
 
   # ---- 1. System packages ----
+  # Check both commands (git/xvfb/etc) AND critical apt packages that don't
+  # install their own /usr/bin binary (build-essential, python3-dev,
+  # python3.12) that we discover only via dpkg.
   local need=0
-  for cmd in git python3 Xvfb xdotool ffmpeg curl; do
+  for cmd in git python3 Xvfb xdotool ffmpeg curl gcc; do
     if ! have "$cmd"; then need=1; break; fi
   done
+  if [ "$need" -eq 0 ] && [ "$mgr" = "apt" ]; then
+    # gcc is present but check python3.12 too (needed for TF compatibility).
+    if ! have python3.12; then need=1; fi
+    # And python3-dev headers so pip source builds succeed.
+    if ! dpkg -s python3-dev >/dev/null 2>&1; then need=1; fi
+  fi
   if [ "$need" -eq 1 ]; then
     log "Installing system packages..."
     install_system_packages "$mgr"
@@ -147,12 +159,40 @@ do_install() {
   cd "$APP_DIR"
 
   # ---- 3. Python venv ----
+  # TensorFlow does not yet ship wheels for Python 3.13+. If the system's
+  # default python3 is too new, prefer python3.12 (installed above via apt)
+  # for the venv so tensorflow-cpu is installable from a pre-built wheel.
   local VENV="$INSTALL_DIR/.venv"
+  local venv_py="$PYTHON_BIN"
+  local sys_py_ver
+  sys_py_ver=$($PYTHON_BIN -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+  if [ "$(printf '%s\n' "$sys_py_ver" 3.13 | sort -V | head -n1)" = "3.13" ] && [ "$sys_py_ver" != "3.12" ]; then
+    if have python3.12; then
+      log "System Python is $sys_py_ver (too new for TensorFlow); using python3.12 for venv"
+      venv_py="python3.12"
+    else
+      warn "System Python is $sys_py_ver and python3.12 is not installed;"
+      warn "tensorflow-cpu will likely fail. Consider installing python3.12 manually."
+    fi
+  fi
+
+  # If existing venv uses a python we no longer want (e.g. old 3.14 attempt),
+  # rebuild it with the chosen interpreter.
+  if [ -x "$VENV/bin/python" ]; then
+    local existing_ver
+    existing_ver=$("$VENV/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo unknown)
+    local wanted_ver
+    wanted_ver=$("$venv_py" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo unknown)
+    if [ "$existing_ver" != "$wanted_ver" ]; then
+      log "Recreating venv (was Python $existing_ver, want $wanted_ver)"
+      rm -rf "$VENV"
+    else
+      log "Python venv already present (Python $existing_ver)"
+    fi
+  fi
   if [ ! -x "$VENV/bin/python" ]; then
-    log "Creating Python venv at $VENV"
-    $PYTHON_BIN -m venv "$VENV"
-  else
-    log "Python venv already present"
+    log "Creating Python venv at $VENV using $venv_py"
+    "$venv_py" -m venv "$VENV"
   fi
   # shellcheck disable=SC1091
   source "$VENV/bin/activate"
