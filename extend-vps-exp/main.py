@@ -459,16 +459,36 @@ def continue_free_vps(page: Page):
         cf_failed = page.locator("text=認証に失敗しました").count() > 0
         captcha_wrong = page.locator("text=入力された認証コードが正しくありません").count() > 0
 
-        if cf_failed:
-            log(f"Cloudflare auth failed on attempt {_attempt + 1}, retrying")
-            debug_capture.capture(page, f"cf_failed_a{_attempt + 1}")
-            page.wait_for_timeout(2000)
+        if cf_failed or captcha_wrong:
+            _kind = "cf_failed" if cf_failed else "captcha_wrong"
+            log(f"{_kind} on attempt {_attempt + 1}, going back to captcha form")
+            debug_capture.capture(page, f"{_kind}_a{_attempt + 1}")
+            # The error page has no captcha form; navigate back to reach the form again.
             try:
-                page.wait_for_selector('img[src^="data:image"]', timeout=10000)
+                page.go_back(wait_until="domcontentloaded", timeout=15000)
+                page.wait_for_timeout(1500)
+            except Exception as _be:
+                log(f"go_back failed: {_be}")
+            # If the form isn't there, click the update flow again.
+            if page.locator('[placeholder="上の画像の数字を入力"]').count() == 0:
+                log("captcha form missing after go_back, re-entering flow")
+                try:
+                    _btn = page.get_by_text("更新する")
+                    _btn.wait_for(state="visible", timeout=8000)
+                    _btn.click()
+                    _cont = page.get_by_text("引き続き無料VPSの利用を継続する")
+                    _cont.wait_for(state="visible", timeout=10000)
+                    _cont.click()
+                except Exception as _re:
+                    log(f"re-enter flow failed: {_re}")
+            # Wait for the CAPTCHA input to reappear before next attempt starts polling image.
+            try:
+                page.wait_for_selector('[placeholder="上の画像の数字を入力"]', timeout=15000)
             except Exception:
-                log("captcha image did not reload")
+                log("captcha input did not reappear")
+            page.wait_for_timeout(1000)
             continue
-        elif captcha_wrong:
+        elif False:  # legacy branch retained for structure; both handled above
             log(f"CAPTCHA code wrong on attempt {_attempt + 1}, retrying")
             debug_capture.capture(page, f"captcha_wrong_a{_attempt + 1}")
             page.wait_for_timeout(1000)
