@@ -70,17 +70,53 @@ detect_pkg_mgr() {
   echo unknown
 }
 
+# Fallback installer: portable, static-linked Python 3.12 from
+# python-build-standalone (used by uv, ruff, etc.). Extracts to /opt/python-3.12
+# and symlinks `python3.12` into /usr/local/bin.
+# This works even on brand-new Ubuntu releases where no PPA has caught up.
+install_python312_standalone() {
+  local arch tag url tmp
+  arch=$(uname -m)
+  # See https://github.com/astral-sh/python-build-standalone/releases
+  # We pin a known-good release tag to avoid API rate-limit surprises.
+  tag="20241016"
+  case "$arch" in
+    x86_64|amd64)
+      url="https://github.com/astral-sh/python-build-standalone/releases/download/${tag}/cpython-3.12.7+${tag}-x86_64-unknown-linux-gnu-install_only.tar.gz"
+      ;;
+    aarch64|arm64)
+      url="https://github.com/astral-sh/python-build-standalone/releases/download/${tag}/cpython-3.12.7+${tag}-aarch64-unknown-linux-gnu-install_only.tar.gz"
+      ;;
+    *)
+      error "install_python312_standalone: unsupported arch $arch"
+      exit 1
+      ;;
+  esac
+
+  tmp=$(mktemp -d)
+  log "Downloading portable Python 3.12 from python-build-standalone (${arch})..."
+  curl -fsSL "$url" -o "$tmp/py312.tar.gz"
+  $SUDO mkdir -p /opt
+  $SUDO rm -rf /opt/python-3.12
+  $SUDO tar -xzf "$tmp/py312.tar.gz" -C /opt
+  $SUDO mv /opt/python /opt/python-3.12
+  $SUDO ln -sf /opt/python-3.12/bin/python3.12 /usr/local/bin/python3.12
+  rm -rf "$tmp"
+  log "python3.12 installed at /opt/python-3.12 (symlinked to /usr/local/bin/python3.12)"
+}
+
 install_system_packages() {
   local mgr=$1
-  # Package name mapping (Debian names as base).
-  # build-essential is a fallback in case pip has to build a wheel from source
-  # (typically only happens when the running Python is too new for the pinned
-  # numpy/tensorflow release).
+  # These are the non-python packages we always need, and will succeed on any
+  # supported Debian/Ubuntu release.
+  local base_pkgs=(git python3 python3-pip python3-venv python3-dev build-essential \
+                   xvfb xdotool ffmpeg curl ca-certificates software-properties-common)
   # python3.12 is required as a fallback runtime because TensorFlow does not
-  # yet ship wheels for Python 3.13+ (Ubuntu 26.04 uses 3.14 by default).
-  local pkgs=(git python3 python3-pip python3-venv python3-dev build-essential \
-              python3.12 python3.12-venv python3.12-dev \
-              xvfb xdotool ffmpeg curl ca-certificates software-properties-common)
+  # ship wheels for Python 3.13+. On older Ubuntu (22.04/24.04) it's in main.
+  # On very new Ubuntu (26.04 "resolute") it needs deadsnakes PPA, and if
+  # deadsnakes doesn't publish for that codename we install a standalone
+  # binary tarball via install_python312_standalone().
+  local py312_pkgs=(python3.12 python3.12-venv python3.12-dev)
   case "$mgr" in
     apt)
       # Third-party PPAs (e.g. packagecloud speedtest-cli with invalid codename)
@@ -92,9 +128,30 @@ install_system_packages() {
         warn "$(tail -n 3 /tmp/apt-update.err)"
         warn "Continuing; install step will fail if base packages are unreachable."
       fi
+      # Step 1: install base packages (always available on Ubuntu/Debian).
       # Use `env` so the env-var-prefix syntax works regardless of whether
       # $SUDO expands to empty (root) or to `sudo` (non-root).
-      $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${pkgs[@]}"
+      $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${base_pkgs[@]}"
+
+      # Step 2: try to get python3.12.
+      #   - If it's in main repos already (Ubuntu 24.04), install directly.
+      #   - Otherwise add deadsnakes PPA and retry.
+      #   - If both fail (e.g. deadsnakes hasn't published for this codename),
+      #     fall back to a standalone portable binary via helper.
+      if $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${py312_pkgs[@]}" 2>/tmp/py312-main.err; then
+        log "python3.12 installed from main repos"
+      else
+        warn "python3.12 not in main repos; adding Deadsnakes PPA..."
+        if $SUDO add-apt-repository -y ppa:deadsnakes/ppa 2>/tmp/deadsnakes-add.err \
+           && $SUDO apt-get update -qq 2>/tmp/apt-update2.err \
+           && $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${py312_pkgs[@]}" 2>/tmp/py312-ppa.err; then
+          log "python3.12 installed from Deadsnakes PPA"
+        else
+          warn "Deadsnakes PPA did not provide python3.12 for this Ubuntu codename."
+          warn "Falling back to python-build-standalone portable binary..."
+          install_python312_standalone
+        fi
+      fi
       ;;
     dnf|yum)
       # Fedora/RHEL: python3-venv is bundled with python3; xvfb is xorg-x11-server-Xvfb.
