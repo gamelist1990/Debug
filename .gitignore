@@ -2,3 +2,5 @@
 /.venv
 extend-vps-exp/.env
 cap/
+homeproxy/.env
+homeproxy/.env.example

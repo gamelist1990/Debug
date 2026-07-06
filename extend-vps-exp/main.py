@@ -402,7 +402,39 @@ def main() -> int:
     }
     proxy = os.environ.get("PROXY_SERVER")
     if proxy:
+        # プロキシ URL の user:pass 部分はログに出さない
+        try:
+            from urllib.parse import urlparse
+            _p = urlparse(proxy)
+            _safe = f"{_p.scheme}://***@{_p.hostname}:{_p.port}"
+        except Exception:
+            _safe = "(set)"
+        log(f"[proxy] PROXY_SERVER active -> {_safe}")
         launch_kwargs["proxy"] = proxy
+
+        # 事前に curl でプロキシ経由の出口 IP を確認する。ここで失敗すれば
+        # そもそもトンネルが張れていない/プロキシが上がっていないので
+        # ブラウザを起動する前に落とす（ERR_EMPTY_RESPONSE の原因が
+        # 一目でわかるようにする）。
+        try:
+            import subprocess
+            r = subprocess.run(
+                ["curl", "-sS", "--max-time", "10", "-x", proxy, "https://ifconfig.io"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                exit_ip = r.stdout.strip().splitlines()[-1]
+                log(f"[proxy] exit IP via proxy = {exit_ip}")
+            else:
+                log(f"[proxy] preflight FAILED rc={r.returncode} stderr={r.stderr[:200]!r}")
+                log("[proxy] --> \u5bb6PC \u5074\u3067 start.ps1 / tunnel.ps1 \u304c\u8d77\u52d5\u3057\u3066\u3044\u308b\u304b\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044")
+                return 3
+        except Exception as _pe:
+            log(f"[proxy] preflight exception: {_pe}")
+            return 3
+    else:
+        log("[proxy] PROXY_SERVER not set -> \u76f4\u63a5 VPS \u306e IP \u3067\u5916\u306b\u51fa\u307e\u3059 (Cloudflare \u306b\u5f3e\u304b\u308c\u3084\u3059\u3044)")
+
     license_key = os.environ.get("CLOAKBROWSER_LICENSE_KEY")
     if license_key:
         launch_kwargs["license_key"] = license_key
