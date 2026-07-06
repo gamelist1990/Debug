@@ -479,8 +479,8 @@ def continue_free_vps(page: Page):
                     _cont = page.get_by_text("引き続き無料VPSの利用を継続する")
                     _cont.wait_for(state="visible", timeout=10000)
                     _cont.click()
-                except Exception as _re:
-                    log(f"re-enter flow failed: {_re}")
+                except Exception as _reenter_err:
+                    log(f"re-enter flow failed: {_reenter_err}")
             # Wait for the CAPTCHA input to reappear before next attempt starts polling image.
             try:
                 page.wait_for_selector('[placeholder="上の画像の数字を入力"]', timeout=15000)
