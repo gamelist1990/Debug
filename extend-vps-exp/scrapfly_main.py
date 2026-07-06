@@ -102,17 +102,25 @@ def build_phase1_scenario(email: str, password: str) -> list:
         "    form_method: form ? (form.method || 'POST').toUpperCase() : 'POST',"
         "    hidden,"
         "    href: location.href,"
+        "    missing_clicks: (window.__missing_clicks || []),"
+        "    body_text: (document.body ? document.body.innerText : '').slice(0, 500),"
         "  };"
         "})()"
     )
 
     # ※ Scrapfly の click セレクタは純粋な CSS のみ。Playwright 拡張 :has-text() / text= は
     # 使えないので、テキスト検索で例クリックは execute (JS) で実行する。
+    # ※ 見つからなかったら例外を投げずにログを残してスキップする。
+    # window.__missing_clicks に登録して、後段の extract で拾う。
     click_by_text = (
         "const t = {text}; "
-        "const els = Array.from(document.querySelectorAll('a, button, input, span, div')); "
-        "const el = els.find(e => (e.innerText || e.value || '').includes(t)); "
-        "if (!el) throw new Error('text not found: ' + t); "
+        "const els = Array.from(document.querySelectorAll('*')); "
+        "const el = els.find(e => {"
+        "  if (!e.offsetParent && e.tagName !== 'INPUT') return false;"  # visible check
+        "  const s = (e.innerText || e.value || '').trim();"
+        "  return s === t || s.includes(t);"
+        "}); "
+        "if (!el) { window.__missing_clicks = (window.__missing_clicks || []); window.__missing_clicks.push(t); return; } "
         "el.click();"
     )
 
@@ -130,17 +138,17 @@ def build_phase1_scenario(email: str, password: str) -> list:
 
         # --- 契約情報ページへ ---
         {"click": {"selector": ".contract__menu"}},
-        {"wait": 300},
+        {"wait": 500},
         {"execute": {"script": click_by_text.replace("{text}", "'\u5951\u7d04\u60c5\u5831'")}},
         {"wait_for_navigation": {"timeout": 5000}},
 
         # --- 更新する ---
-        {"wait": 500},
+        {"wait": 2000},
         {"execute": {"script": click_by_text.replace("{text}", "'\u66f4\u65b0\u3059\u308b'")}},
         {"wait_for_navigation": {"timeout": 5000}},
 
         # --- 引き続き無料VPSの利用を継続する ---
-        {"wait": 500},
+        {"wait": 1500},
         {"execute": {"script": click_by_text.replace("{text}", "'\u5f15\u304d\u7d9a\u304d\u7121\u6599VPS\u306e\u5229\u7528\u3092\u7d99\u7d9a\u3059\u308b'")}},
 
         # --- CAPTCHA 画像と Turnstile の両方が揃うのを待つ ---
@@ -254,13 +262,29 @@ def run() -> int:
             "href": (r1.scrape_result or {}).get("url") or LOGIN_URL,
         }
 
+    # クリックで当てられなかったテキストの報告。
+    # 「更新する」が見つからない = もう更新済み / まだ期限前 なので成功扱い。
+    missing = info.get("missing_clicks") or []
+    if missing:
+        log(f"phase1: missing clicks = {missing}")
+        if "\u66f4\u65b0\u3059\u308b" in missing:
+            log("[OK] '\u66f4\u65b0\u3059\u308b' \u30dc\u30bf\u30f3\u304c\u306a\u3044 - \u3059\u3067\u306b\u66f4\u65b0\u6e08\u307f\u307e\u305f\u306f\u671f\u9650\u5916\u306e\u305f\u3081\u6210\u529f\u6271\u3044")
+            print("\u66f4\u65b0\u30dc\u30bf\u30f3\u304c\u306a\u3044\u305f\u3081\u3001\u4eca\u56de\u306f\u4f55\u3082\u3057\u306a\u3044\u3067\u7d42\u4e86\u3057\u307e\u3059\u3002")
+            return 0
+
     log(
-        f"phase1 ok: captcha_len={len(info['captcha_src'])} "
+        f"phase1 ok: captcha_len={len(info['captcha_src']) if info.get('captcha_src') else 0} "
         f"cf_token_len={len(info.get('cf_token') or '')} "
         f"captcha_name={info.get('captcha_name')!r} "
         f"form_action={info.get('form_action')!r} "
-        f"hidden_keys={list((info.get('hidden') or {}).keys())}"
+        f"hidden_keys={list((info.get('hidden') or {}).keys())} "
+        f"body_head={(info.get('body_text') or '')[:120]!r}"
     )
+
+    if not info.get("captcha_src"):
+        log("[FAIL] CAPTCHA \u753b\u50cf\u304c\u53d6\u5f97\u3067\u304d\u307e\u305b\u3093\u3002\u30da\u30fc\u30b8\u306e\u9077\u79fb\u304c\u60f3\u5b9a\u3068\u9055\u3046\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059")
+        log(f"body_text head: {(info.get('body_text') or '')[:300]!r}")
+        return 1
 
     # ---- Phase 2: CAPTCHA をローカル解読 ----------------------------------
     from captcha_solver import solve as solve_captcha
