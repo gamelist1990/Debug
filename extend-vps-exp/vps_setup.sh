@@ -321,16 +321,50 @@ do_install() {
   fi
 
   # ---- 5. Playwright browsers ----
+  # Chromium requires a specific set of shared libraries at runtime.
+  # `playwright install --with-deps` normally handles this via apt-get, but
+  # if any third-party apt repo is broken (non-zero exit), the whole step
+  # fails and Chromium won't start with 'libatk-1.0.so.0: cannot open shared
+  # object file'. So we install the libs ourselves, tolerating apt errors
+  # from unrelated broken repos.
+  if [ "$mgr" = "apt" ]; then
+    log "Installing Chromium runtime libraries..."
+    # These names cover Ubuntu 22.04 through 26.04. The `t64` variants exist
+    # on 24.04+ due to the time_t 64-bit transition; older Ubuntu will just
+    # ignore unknown names when we install one-by-one.
+    local chromium_libs=(
+      libnss3 libnspr4 libxkbcommon0 libxcomposite1 libxdamage1
+      libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2
+      libasound2t64 libatk1.0-0t64 libatk-bridge2.0-0t64
+      libcups2t64 libatspi2.0-0t64
+      # Fallback names for older Ubuntu (22.04) where t64 packages don't exist.
+      libasound2 libatk1.0-0 libatk-bridge2.0-0 libcups2 libatspi2.0-0
+    )
+    # Install what we can; individual missing packages are OK because we
+    # cover both t64 and non-t64 variants for cross-version compatibility.
+    for _lib in "${chromium_libs[@]}"; do
+      $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$_lib" >/dev/null 2>&1 || true
+    done
+  fi
+
   if [ ! -d "$HOME/.cache/ms-playwright" ] \
      || [ -z "$(find "$HOME/.cache/ms-playwright" -maxdepth 4 -name chrome -o -name chromium -o -name headless_shell 2>/dev/null | head -n1)" ]; then
-    log "Installing Playwright Chromium (with system deps)..."
-    # --with-deps requires root; if this fails (non-root without sudo policy),
-    # we retry without --with-deps and rely on already-installed libs.
-    if ! python -m playwright install --with-deps chromium 2>/dev/null; then
-      python -m playwright install chromium
-    fi
+    log "Installing Playwright Chromium browser binaries..."
+    python -m playwright install chromium
   else
     log "Playwright browsers already present"
+  fi
+
+  # Sanity check: try launching chrome briefly to confirm all libs are present.
+  local chrome_bin
+  chrome_bin=$(find "$HOME/.cache/ms-playwright" -maxdepth 4 -name chrome -type f 2>/dev/null | head -n1)
+  if [ -n "$chrome_bin" ]; then
+    if ! "$chrome_bin" --version >/dev/null 2>&1; then
+      warn "Chromium binary can't run yet (missing shared libraries)."
+      warn "Details:"
+      "$chrome_bin" --version 2>&1 | head -n 3 | while read -r line; do warn "  $line"; done || true
+      warn "You may need: sudo apt-get install -y --fix-missing libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libasound2t64 libatspi2.0-0t64"
+    fi
   fi
 
   # Scrapling's optional stealth browser bundle.
