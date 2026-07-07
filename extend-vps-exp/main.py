@@ -196,19 +196,118 @@ def _wait_and_click(locator, timeout_ms: int = 60_000, interval_ms: int = 500) -
 
 
 def _sleep_for_cf(seconds: float) -> None:
-    """Passively wait for Cloudflare Turnstile to resolve itself.
+    """Passive wait (fallback path).
 
-    We deliberately do NOT poll ``input[name=cf-turnstile-response]`` via
-    ``page.evaluate()``. Each evaluate() call fires CDP traffic that CF's
-    behavioural analysis picks up as an "automation signal" — that appears
-    to be what tanked our siteverify score last run (token acquired in
-    211ms but rejected on submit).
-
-    CloakBrowser's stealth Chromium normally resolves the non-interactive
-    Turnstile challenge within ~3–5s. Just sleep for a generous window,
-    keep our CDP footprint at zero, and let the browser do its thing.
+    Used only when no Turnstile widget is detected — we still want to give
+    non-interactive challenges time to settle.
     """
     time.sleep(seconds)
+
+
+# ---------------------------------------------------------------------------
+# Cloudflare Turnstile のアクティブ対応
+# ---------------------------------------------------------------------------
+def _read_turnstile_token(page) -> str:
+    """input[name=cf-turnstile-response] の value を読む。"""
+    try:
+        return page.evaluate(
+            "() => { const els = document.querySelectorAll('input[name=\"cf-turnstile-response\"]');"
+            "        for (const e of els) { if (e.value && e.value.length > 20) return e.value; } return ''; }"
+        ) or ""
+    except Exception:
+        return ""
+
+
+def _find_turnstile_iframe(page):
+    try:
+        return page.query_selector("iframe[src*='challenges.cloudflare.com']")
+    except Exception:
+        return None
+
+
+def _try_click_turnstile(page) -> bool:
+    """Turnstile の checkbox を人間っぽくクリックする。
+
+    Managed Challenge (チェックボックスを押すタイプ) は passive wait
+    だけでは通らないので、iframe の左上にあるチェックボックス
+    (~ (27, 28)px) を humanize mouse でクリックする。
+    """
+    try:
+        el = _find_turnstile_iframe(page)
+        if not el:
+            return False
+        box = el.bounding_box()
+        if not box or box.get("width", 0) < 20:
+            return False
+        try:
+            el.scroll_into_view_if_needed(timeout=3000)
+            time.sleep(0.3)
+            box = el.bounding_box() or box
+        except Exception:
+            pass
+        target_x = box["x"] + 27
+        target_y = box["y"] + 28
+        log(f"[cf] Turnstile checkbox at (~{target_x:.0f}, {target_y:.0f}), clicking")
+        page.mouse.move(target_x - 60, target_y - 20, steps=15)
+        time.sleep(0.2)
+        page.mouse.move(target_x, target_y, steps=10)
+        time.sleep(0.15)
+        page.mouse.down()
+        time.sleep(0.08)
+        page.mouse.up()
+        return True
+    except Exception as e:
+        log(f"[cf] click attempt exception: {e}")
+        return False
+
+
+def _solve_turnstile(page, max_seconds: float = 30.0) -> bool:
+    """Turnstile を能動的に解く。
+
+    手順:
+      1. まず 6s 待って non-interactive (auto) で通るか見る。token が生えたら完了。
+      2. 生えなければ Turnstile iframe を探してチェックボックスをクリックする。
+      3. クリック後さらに poll して token が生えるのを待つ。
+
+    戻り値: True = token が見えた, False = タイムアウトまでに見えなかった
+    """
+    deadline = time.time() + max_seconds
+
+    # Phase 1: passive wait しながら token を poll
+    log("[cf] phase1: passive wait for auto-solve (up to 6s)")
+    phase1_end = min(deadline, time.time() + 6.0)
+    while time.time() < phase1_end:
+        token = _read_turnstile_token(page)
+        if token:
+            log(f"[cf] token issued during passive wait (len={len(token)})")
+            return True
+        time.sleep(0.5)
+
+    # Phase 2: checkbox クリック
+    log("[cf] phase2: attempting checkbox click")
+    clicked = _try_click_turnstile(page)
+    if not clicked:
+        log("[cf] no checkbox iframe visible; falling back to more passive wait")
+        # widget がないフォームもあるので、残り時間をパッシブに使う
+        while time.time() < deadline:
+            token = _read_turnstile_token(page)
+            if token:
+                log(f"[cf] token issued (passive, len={len(token)})")
+                return True
+            time.sleep(0.5)
+        return False
+
+    # Phase 3: click 後の polling
+    log("[cf] phase3: waiting for token after click")
+    while time.time() < deadline:
+        token = _read_turnstile_token(page)
+        if token:
+            log(f"[cf] token issued after click (len={len(token)})")
+            return True
+        time.sleep(0.5)
+
+    log("[cf] token not observed within deadline")
+    return False
 
 
 def _solve_captcha(page) -> Optional[str]:
@@ -407,16 +506,15 @@ def run_renewal(page, cap: FrameCapture) -> bool:
     page.wait_for_timeout(500)
     cap.snap(page, "captcha_filled")
 
-    # ---- Cloudflare Turnstile (CloakBrowser handles it natively) ----
-    # Passive wait, no CDP polling. CF's behavioural analysis flags
-    # frequent DOM inspection via CDP as an automation signal — polling
-    # for the token caused our previous siteverify rejections despite the
-    # token being populated within 200ms. A plain sleep keeps the CDP
-    # channel silent while the stealth binary lets Turnstile settle.
-    log("passively waiting ~12s for Cloudflare Turnstile to settle…")
+    # ---- Cloudflare Turnstile ----
+    # Managed Challenge (チェックボックスタイプ) は passive wait だけでは通らないので、
+    # token を poll しつつ、必要なら iframe を人間っぽくクリックする。
+    log("solving Cloudflare Turnstile…")
     cap.snap(page, "cf_waiting")
-    _sleep_for_cf(12.0)
+    cf_ok = _solve_turnstile(page, max_seconds=30.0)
     cap.snap(page, "cf_done")
+    if not cf_ok:
+        log("[warn] Turnstile token not observed — submitting anyway")
 
     # ---- Submit ----
     # Small random pre-click delay so submit doesn't fire on a suspiciously
