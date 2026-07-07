@@ -266,12 +266,64 @@ def _log_turnstile_dom_state(page) -> None:
             "    w: e.clientWidth, h: e.clientHeight"
             "  }));"
             "  const tokens = Array.from(document.querySelectorAll('input[name=\"cf-turnstile-response\"]')).length;"
-            "  return {iframes, widgets, tokenInputs: tokens};"
+            "  const scripts = Array.from(document.querySelectorAll('script[src*=\"cloudflare\"],script[src*=\"turnstile\"]')).map(s => (s.src||'').slice(0,120));"
+            "  const hasTurnstileGlobal = typeof window.turnstile !== 'undefined';"
+            "  const turnstileMethods = hasTurnstileGlobal ? Object.keys(window.turnstile) : [];"
+            "  return {iframes, widgets, tokenInputs: tokens, scripts, hasTurnstileGlobal, turnstileMethods};"
             "}"
         )
         log(f"[cf][debug] iframes={info.get('iframes')} widgets={info.get('widgets')} token_inputs={info.get('tokenInputs')}")
+        log(f"[cf][debug] scripts={info.get('scripts')} turnstile_global={info.get('hasTurnstileGlobal')} methods={info.get('turnstileMethods')}")
     except Exception as e:
         log(f"[cf][debug] dom probe failed: {e}")
+
+
+def _try_force_render_turnstile(page) -> bool:
+    """api.js はロードされているのに iframe が生えない場合、
+    手動で turnstile.render() を呼んでやる。"""
+    try:
+        result = page.evaluate(
+            "() => {"
+            "  if (typeof window.turnstile === 'undefined') return {ok:false, reason:'no_global'};"
+            "  const widget = document.querySelector('.cf-turnstile');"
+            "  if (!widget) return {ok:false, reason:'no_widget'};"
+            "  const sitekey = widget.getAttribute('data-sitekey');"
+            "  if (!sitekey) return {ok:false, reason:'no_sitekey'};"
+            "  try {"
+            "    const id = window.turnstile.render(widget, {sitekey: sitekey, callback: (t) => { window.__cfToken = t; }});"
+            "    return {ok:true, id: String(id)};"
+            "  } catch (e) { return {ok:false, reason:'render_error', err: String(e)}; }"
+            "}"
+        )
+        log(f"[cf] force render result: {result}")
+        return bool(result and result.get("ok"))
+    except Exception as e:
+        log(f"[cf] force render exception: {e}")
+        return False
+
+
+def _try_inject_turnstile_script(page) -> bool:
+    """Turnstile の api.js がロードされてないなら注入する。"""
+    try:
+        result = page.evaluate(
+            "() => new Promise((resolve) => {"
+            "  if (typeof window.turnstile !== 'undefined') { resolve({ok:true, already:true}); return; }"
+            "  const existing = document.querySelector('script[src*=\"turnstile\"]');"
+            "  if (existing) { resolve({ok:true, existing:true}); return; }"
+            "  const s = document.createElement('script');"
+            "  s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';"
+            "  s.async = true; s.defer = true;"
+            "  s.onload = () => resolve({ok:true, loaded:true});"
+            "  s.onerror = (e) => resolve({ok:false, err:'load_failed'});"
+            "  document.head.appendChild(s);"
+            "  setTimeout(() => resolve({ok:false, err:'timeout'}), 10000);"
+            "})"
+        )
+        log(f"[cf] inject api.js result: {result}")
+        return bool(result and result.get("ok"))
+    except Exception as e:
+        log(f"[cf] inject exception: {e}")
+        return False
 
 
 def _try_click_turnstile(page) -> bool:
@@ -340,6 +392,61 @@ def _solve_turnstile(page, max_seconds: float = 30.0) -> bool:
 
     # 現在の DOM 状態をデバッグログ
     _log_turnstile_dom_state(page)
+
+    # iframe がない場合 = Turnstile が render されてない。手動レンダーを試行
+    iframe_missing = False
+    try:
+        iframe_missing = page.evaluate(
+            "() => !document.querySelector('iframe[src*=\"challenges.cloudflare.com\"]')"
+        )
+    except Exception:
+        pass
+
+    if iframe_missing:
+        log("[cf] iframe is missing — attempting recovery")
+        # (1) api.js がないなら入れる
+        _try_inject_turnstile_script(page)
+        time.sleep(2.0)
+        # (2) window.turnstile.render() を手動で呼ぶ
+        rendered = _try_force_render_turnstile(page)
+        if rendered:
+            log("[cf] force-render succeeded, waiting for iframe to appear")
+            for _ in range(20):  # 最大 10s
+                time.sleep(0.5)
+                try:
+                    got_iframe = page.evaluate(
+                        "() => !!document.querySelector('iframe[src*=\"challenges.cloudflare.com\"]')"
+                    )
+                    if got_iframe:
+                        log("[cf] iframe injected after force render")
+                        break
+                except Exception:
+                    pass
+            # トークンが callback で入ったか確認
+            for _ in range(10):
+                time.sleep(0.5)
+                try:
+                    cb_token = page.evaluate("() => window.__cfToken || ''")
+                    if cb_token and len(cb_token) > 20:
+                        log(f"[cf] token received via callback (len={len(cb_token)})")
+                        # 隠し input にも入れておく
+                        try:
+                            page.evaluate(
+                                "(t) => { document.querySelectorAll('input[name=\"cf-turnstile-response\"]').forEach(e => e.value = t); }",
+                                cb_token,
+                            )
+                        except Exception:
+                            pass
+                        return True
+                except Exception:
+                    pass
+                token = _read_turnstile_token(page)
+                if token:
+                    log(f"[cf] token issued after force render (len={len(token)})")
+                    return True
+        else:
+            log("[cf] force-render failed, falling through to click attempts")
+        _log_turnstile_dom_state(page)
 
     # Phase 2: checkbox / widget クリック (最大 3 回リトライ)
     log("[cf] phase2: attempting widget click (with retries)")
