@@ -862,12 +862,52 @@ def run_renewal(page, cap: FrameCapture) -> bool:
         log("[warn] Turnstile token not observed — submitting anyway")
 
     # ---- Submit ----
-    # Small random pre-click delay so submit doesn't fire on a suspiciously
-    # round tick after Turnstile settles.
+    # Turnstile の token が取れても、ページ側 JS が token を検知して submit
+    # ボタンを enable にするまでにタイムラグがある。disabled / aria-disabled /
+    # スピナー (.btn--loading の running 状態) をチェックしてボタンが本当に
+    # 押せる状態になってからクリックする。
     import random
-    time.sleep(0.8 + random.random() * 1.2)
-    log("submitting")
+
     submit = page.get_by_role("button", name="無料VPSの利用を継続する").first
+
+    log("waiting for submit button to become truly enabled…")
+    submit_ready = False
+    poll_deadline = time.time() + 20.0
+    while time.time() < poll_deadline:
+        try:
+            state = page.evaluate(
+                "() => {"
+                "  const btns = Array.from(document.querySelectorAll('button, a.btn'));"
+                "  const target = btns.find(b => (b.textContent || '').includes('無料VPSの利用を継続する'));"
+                "  if (!target) return {found: false};"
+                "  const disabled = target.hasAttribute('disabled') || target.getAttribute('aria-disabled') === 'true';"
+                "  const cls = target.className || '';"
+                "  const loading = /is-loading|isLoading|running|loading/i.test(cls);"
+                "  const rect = target.getBoundingClientRect();"
+                "  return {found: true, disabled, loading, cls, w: rect.width, h: rect.height};"
+                "}"
+            ) or {}
+            if state.get("found") and not state.get("disabled") and not state.get("loading"):
+                log(f"[submit] button ready (state={state})")
+                submit_ready = True
+                break
+            log(f"[submit] waiting… state={state}")
+        except Exception as e:
+            log(f"[submit] state probe failed: {e}")
+        time.sleep(0.5)
+
+    if not submit_ready:
+        log("[submit] button never became enabled; will try click anyway")
+
+    # ページのスピナーが他にも回ってないかの確認 (丘のため)
+    try:
+        page.wait_for_load_state("networkidle", timeout=5_000)
+    except Exception:
+        pass
+
+    # 少しランダムな pre-click delay
+    time.sleep(1.2 + random.random() * 1.5)
+    log("submitting")
     _wait_and_click(submit, timeout_ms=30_000)
     cap.snap(page, "submitted")
 
