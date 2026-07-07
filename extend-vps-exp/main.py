@@ -288,14 +288,73 @@ def run_renewal(page, cap: FrameCapture) -> bool:
         log("no campaign modal")
 
     log("opening contract menu")
-    menu = page.locator(".contract__menu").first
-    menu.hover()
-    menu.click()
-    cap.snap(page, "menu_opened")
+    # メニューのリンクは DOM には常にあるが、ドロップダウン自体は CSS で非表示のことが多い。
+    # まず href を直接探して goto する。見つからなければトグルをクリックして見えるようにしてからクリック。
+    contract_href = None
+    try:
+        contract_href = page.evaluate(
+            "() => { const a = document.querySelector('.contract__menuList a[href*=\"/xapanel/xvps/server/detail\"]');"
+            "        return a ? a.getAttribute('href') : null; }"
+        )
+    except Exception as e:
+        log(f"contract href probe failed: {e}")
 
-    page.get_by_role("link", name="契約情報").first.click()
-    page.wait_for_load_state("domcontentloaded")
-    cap.snap(page, "contract_info")
+    if contract_href:
+        log(f"contract link found in DOM: {contract_href}")
+        # 完全な URL に変換 (相対パスなら origin を付ける)
+        if contract_href.startswith("/"):
+            try:
+                origin = page.evaluate("() => window.location.origin")
+                target_url = origin + contract_href
+            except Exception:
+                target_url = "https://secure.xserver.ne.jp" + contract_href
+        else:
+            target_url = contract_href
+        page.goto(target_url, wait_until="domcontentloaded", timeout=30_000)
+        cap.snap(page, "contract_info")
+    else:
+        # フォールバック: トグルアイコンをクリックしてメニューを開いてからリンクを探す
+        log("contract href not in DOM; falling back to menu click")
+        try:
+            icon = page.locator(".contract__menuIcon").first
+            icon.wait_for(state="visible", timeout=10_000)
+            icon.click()
+            cap.snap(page, "menu_opened")
+        except Exception as e:
+            log(f"menu icon click failed: {e}; trying .contract__menu")
+            try:
+                page.locator(".contract__menu").first.click()
+                cap.snap(page, "menu_opened")
+            except Exception as e2:
+                log(f"menu click also failed: {e2}")
+
+        # 一度 DOM を見直して href を取る
+        try:
+            contract_href = page.evaluate(
+                "() => { const a = document.querySelector('.contract__menuList a[href*=\"/xapanel/xvps/server/detail\"]');"
+                "        return a ? a.getAttribute('href') : null; }"
+            )
+        except Exception:
+            contract_href = None
+
+        if contract_href:
+            if contract_href.startswith("/"):
+                try:
+                    origin = page.evaluate("() => window.location.origin")
+                    target_url = origin + contract_href
+                except Exception:
+                    target_url = "https://secure.xserver.ne.jp" + contract_href
+            else:
+                target_url = contract_href
+            log(f"navigating to contract detail: {target_url}")
+            page.goto(target_url, wait_until="domcontentloaded", timeout=30_000)
+            cap.snap(page, "contract_info")
+        else:
+            # 最終手段: role=link で探す
+            log("still no href; trying role=link fallback")
+            page.get_by_role("link", name="契約情報").first.click(timeout=15_000)
+            page.wait_for_load_state("domcontentloaded")
+            cap.snap(page, "contract_info")
 
     # 更新する
     try:
