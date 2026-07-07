@@ -218,36 +218,91 @@ def _read_turnstile_token(page) -> str:
         return ""
 
 
+# Turnstile widget / iframe を探すセレクタ群。後ろだと弱い候補になるように並べている。
+_TURNSTILE_SELECTORS = [
+    "iframe[src*='challenges.cloudflare.com']",
+    "iframe[src*='turnstile']",
+    "iframe[title*='Cloudflare']",
+    "iframe[title*='Widget containing']",
+    "iframe[title*='challenge']",
+    ".cf-turnstile",
+    "[data-sitekey]",
+]
+
+
+def _find_turnstile_element(page):
+    """Turnstile widget を見つけて (element, selector) を返す。"""
+    for sel in _TURNSTILE_SELECTORS:
+        try:
+            el = page.query_selector(sel)
+            if el:
+                # サイズが 0 の widget は隠しフィールドなのでスキップ
+                box = el.bounding_box()
+                if box and box.get("width", 0) >= 20 and box.get("height", 0) >= 20:
+                    return el, sel
+        except Exception:
+            continue
+    return None, None
+
+
+# 後方互換のためのエイリアス
 def _find_turnstile_iframe(page):
+    el, _ = _find_turnstile_element(page)
+    return el
+
+
+def _log_turnstile_dom_state(page) -> None:
+    """デバッグ用: Turnstile と iframe の状態をログに出す。"""
     try:
-        return page.query_selector("iframe[src*='challenges.cloudflare.com']")
-    except Exception:
-        return None
+        info = page.evaluate(
+            "() => {"
+            "  const iframes = Array.from(document.querySelectorAll('iframe')).map(f => ({"
+            "    src: (f.src||'').slice(0, 120),"
+            "    title: f.title||'',"
+            "    w: f.clientWidth, h: f.clientHeight"
+            "  }));"
+            "  const widgets = Array.from(document.querySelectorAll('.cf-turnstile,[data-sitekey]')).map(e => ({"
+            "    cls: e.className, sitekey: e.getAttribute('data-sitekey')||'',"
+            "    w: e.clientWidth, h: e.clientHeight"
+            "  }));"
+            "  const tokens = Array.from(document.querySelectorAll('input[name=\"cf-turnstile-response\"]')).length;"
+            "  return {iframes, widgets, tokenInputs: tokens};"
+            "}"
+        )
+        log(f"[cf][debug] iframes={info.get('iframes')} widgets={info.get('widgets')} token_inputs={info.get('tokenInputs')}")
+    except Exception as e:
+        log(f"[cf][debug] dom probe failed: {e}")
 
 
 def _try_click_turnstile(page) -> bool:
     """Turnstile の checkbox を人間っぽくクリックする。
 
     Managed Challenge (チェックボックスを押すタイプ) は passive wait
-    だけでは通らないので、iframe の左上にあるチェックボックス
-    (~ (27, 28)px) を humanize mouse でクリックする。
+    だけでは通らないので、iframe または widget の左上にある
+    チェックボックスをクリックする。
     """
     try:
-        el = _find_turnstile_iframe(page)
+        el, sel = _find_turnstile_element(page)
         if not el:
-            return False
-        box = el.bounding_box()
-        if not box or box.get("width", 0) < 20:
             return False
         try:
             el.scroll_into_view_if_needed(timeout=3000)
             time.sleep(0.3)
-            box = el.bounding_box() or box
         except Exception:
             pass
-        target_x = box["x"] + 27
-        target_y = box["y"] + 28
-        log(f"[cf] Turnstile checkbox at (~{target_x:.0f}, {target_y:.0f}), clicking")
+        box = el.bounding_box()
+        if not box or box.get("width", 0) < 20:
+            return False
+        # widget div なら中心、iframe なら左上 (27, 28)px
+        is_iframe = sel and "iframe" in sel
+        if is_iframe:
+            target_x = box["x"] + 27
+            target_y = box["y"] + 28
+        else:
+            # ウィジェット div の場合も左側にチェックボックスがある
+            target_x = box["x"] + min(30, box["width"] / 2)
+            target_y = box["y"] + box["height"] / 2
+        log(f"[cf] Turnstile widget matched by {sel!r} at box={box}, clicking (~{target_x:.0f}, {target_y:.0f})")
         page.mouse.move(target_x - 60, target_y - 20, steps=15)
         time.sleep(0.2)
         page.mouse.move(target_x, target_y, steps=10)
@@ -274,8 +329,8 @@ def _solve_turnstile(page, max_seconds: float = 30.0) -> bool:
     deadline = time.time() + max_seconds
 
     # Phase 1: passive wait しながら token を poll
-    log("[cf] phase1: passive wait for auto-solve (up to 6s)")
-    phase1_end = min(deadline, time.time() + 6.0)
+    log("[cf] phase1: passive wait for auto-solve (up to 8s)")
+    phase1_end = min(deadline, time.time() + 8.0)
     while time.time() < phase1_end:
         token = _read_turnstile_token(page)
         if token:
@@ -283,30 +338,52 @@ def _solve_turnstile(page, max_seconds: float = 30.0) -> bool:
             return True
         time.sleep(0.5)
 
-    # Phase 2: checkbox クリック
-    log("[cf] phase2: attempting checkbox click")
-    clicked = _try_click_turnstile(page)
-    if not clicked:
-        log("[cf] no checkbox iframe visible; falling back to more passive wait")
-        # widget がないフォームもあるので、残り時間をパッシブに使う
-        while time.time() < deadline:
+    # 現在の DOM 状態をデバッグログ
+    _log_turnstile_dom_state(page)
+
+    # Phase 2: checkbox / widget クリック (最大 3 回リトライ)
+    log("[cf] phase2: attempting widget click (with retries)")
+    clicked_any = False
+    for attempt in range(3):
+        if time.time() >= deadline:
+            break
+        clicked = _try_click_turnstile(page)
+        if clicked:
+            clicked_any = True
+            log(f"[cf] click attempt {attempt + 1} succeeded, polling for token")
+            # Phase 3: click 後の polling (最大 8s)
+            wait_end = min(deadline, time.time() + 8.0)
+            while time.time() < wait_end:
+                token = _read_turnstile_token(page)
+                if token:
+                    log(f"[cf] token issued after click (len={len(token)})")
+                    return True
+                time.sleep(0.5)
+            log(f"[cf] click attempt {attempt + 1}: no token yet, will retry")
+        else:
+            # まだ widget が見えない → 2s 待って再探索
+            log(f"[cf] click attempt {attempt + 1}: no widget visible, waiting 2s")
+            time.sleep(2.0)
             token = _read_turnstile_token(page)
             if token:
-                log(f"[cf] token issued (passive, len={len(token)})")
+                log(f"[cf] token issued during retry wait (len={len(token)})")
                 return True
-            time.sleep(0.5)
-        return False
 
-    # Phase 3: click 後の polling
-    log("[cf] phase3: waiting for token after click")
+    if not clicked_any:
+        log("[cf] no widget ever became clickable")
+        _log_turnstile_dom_state(page)
+
+    # Phase 4: 最後のパッシブ待機
+    log("[cf] phase4: final passive wait until deadline")
     while time.time() < deadline:
         token = _read_turnstile_token(page)
         if token:
-            log(f"[cf] token issued after click (len={len(token)})")
+            log(f"[cf] token issued in final wait (len={len(token)})")
             return True
         time.sleep(0.5)
 
     log("[cf] token not observed within deadline")
+    _log_turnstile_dom_state(page)
     return False
 
 
