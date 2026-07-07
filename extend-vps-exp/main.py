@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -278,9 +279,12 @@ def _log_turnstile_dom_state(page) -> None:
         log(f"[cf][debug] dom probe failed: {e}")
 
 
-def _try_force_render_turnstile(page) -> bool:
+def _try_force_render_turnstile(page) -> str | None:
     """api.js はロードされているのに iframe が生えない場合、
-    手動で turnstile.render() を呼んでやる。"""
+    手動で turnstile.render() を呼んでやる。
+
+    戻り値: 成功時は widget ID (文字列)、失敗時は None。
+    """
     try:
         result = page.evaluate(
             "() => {"
@@ -289,17 +293,99 @@ def _try_force_render_turnstile(page) -> bool:
             "  if (!widget) return {ok:false, reason:'no_widget'};"
             "  const sitekey = widget.getAttribute('data-sitekey');"
             "  if (!sitekey) return {ok:false, reason:'no_sitekey'};"
+            "  window.__cfToken = '';"
+            "  window.__cfError = '';"
+            "  window.__cfWidgetId = '';"
             "  try {"
-            "    const id = window.turnstile.render(widget, {sitekey: sitekey, callback: (t) => { window.__cfToken = t; }});"
-            "    return {ok:true, id: String(id)};"
+            "    /* 既存の render を削除してクリーンな状態にする */"
+            "    try { widget.innerHTML = ''; } catch(_){}"
+            "    const opts = {"
+            "      sitekey: sitekey,"
+            "      callback: (t) => { window.__cfToken = t; },"
+            "      'error-callback': (e) => { window.__cfError = String(e); },"
+            "      'expired-callback': () => { window.__cfToken = ''; },"
+            "    };"
+            "    /* サイト側が invisible を期待してる場合に備えて size を採用 */"
+            "    const dataSize = widget.getAttribute('data-size');"
+            "    if (dataSize) opts.size = dataSize;"
+            "    const id = window.turnstile.render(widget, opts);"
+            "    window.__cfWidgetId = String(id);"
+            "    return {ok:true, id: String(id), size: dataSize||'normal'};"
             "  } catch (e) { return {ok:false, reason:'render_error', err: String(e)}; }"
             "}"
         )
         log(f"[cf] force render result: {result}")
-        return bool(result and result.get("ok"))
+        if result and result.get("ok"):
+            return result.get("id") or ""
+        return None
     except Exception as e:
         log(f"[cf] force render exception: {e}")
-        return False
+        return None
+
+
+def _try_execute_invisible_turnstile(page, widget_id: str) -> None:
+    """invisible mode の Turnstile は render だけでは発火せず、
+    turnstile.execute() を明示的に呼ばないと token が生えない。
+    """
+    try:
+        result = page.evaluate(
+            "(id) => {"
+            "  try {"
+            "    if (id && typeof window.turnstile.execute === 'function') {"
+            "      window.turnstile.execute(id);"
+            "      return {ok:true, mode:'id'};"
+            "    }"
+            "    const widget = document.querySelector('.cf-turnstile');"
+            "    if (widget && typeof window.turnstile.execute === 'function') {"
+            "      window.turnstile.execute(widget);"
+            "      return {ok:true, mode:'widget'};"
+            "    }"
+            "    return {ok:false, reason:'no_execute'};"
+            "  } catch (e) { return {ok:false, err:String(e)}; }"
+            "}",
+            widget_id or "",
+        )
+        log(f"[cf] execute() result: {result}")
+    except Exception as e:
+        log(f"[cf] execute exception: {e}")
+
+
+def _read_cf_token_all(page) -> str:
+    """callback ・window.__cfToken・getResponse()・隠し input を全部見てトークンを探す。"""
+    # 1. callback で保存されたトークン
+    try:
+        t = page.evaluate("() => window.__cfToken || ''") or ""
+        if t and len(t) > 20:
+            return t
+    except Exception:
+        pass
+    # 2. turnstile.getResponse(widgetId) or getResponse()
+    try:
+        t = page.evaluate(
+            "() => {"
+            "  if (typeof window.turnstile === 'undefined') return '';"
+            "  try { const r = window.turnstile.getResponse(window.__cfWidgetId || undefined); if (r) return r; } catch(_){}"
+            "  try { const r = window.turnstile.getResponse(); if (r) return r; } catch(_){}"
+            "  return '';"
+            "}"
+        ) or ""
+        if t and len(t) > 20:
+            return t
+    except Exception:
+        pass
+    # 3. 隠し input
+    return _read_turnstile_token(page)
+
+
+def _propagate_cf_token(page, token: str) -> None:
+    """取得した token をページ内のすべての cf-turnstile-response input に入れる。"""
+    try:
+        page.evaluate(
+            "(t) => { document.querySelectorAll('input[name=\"cf-turnstile-response\"]').forEach(e => { e.value = t; e.dispatchEvent(new Event('change', {bubbles: true})); }); }",
+            token,
+        )
+    except Exception:
+        pass
 
 
 def _try_inject_turnstile_script(page) -> bool:
@@ -326,13 +412,109 @@ def _try_inject_turnstile_script(page) -> bool:
         return False
 
 
-def _try_click_turnstile(page) -> bool:
-    """Turnstile の checkbox を人間っぽくクリックする。
+# scrapling 流: CF challenge iframe は document.querySelectorAll('iframe') では
+# 見えないことがある (Shadow iframe / closed frame)。page.frame(url=regex) だけ
+# が見つけられる。
+_CF_FRAME_URL_PATTERN = re.compile(r"^https?://challenges\.cloudflare\.com/cdn-cgi/challenge-platform/.*")
 
-    Managed Challenge (チェックボックスを押すタイプ) は passive wait
-    だけでは通らないので、iframe または widget の左上にある
-    チェックボックスをクリックする。
+# Turnstile widget の内側 div を探すセレクタ (scrapling 流)
+# .cf-turnstile > div > div が実際のチェックボックスを含む内側ボックス
+_CF_INNER_BOX_SELECTORS = [
+    "#cf_turnstile div",
+    "#cf-turnstile div",
+    ".cf-turnstile > div > div",
+    ".turnstile > div > div",
+]
+
+
+def _find_cf_challenge_frame(page):
+    """Playwright の frame() API で CF challenge iframe を探す。
+
+    document.querySelectorAll('iframe') で見えないことがあるので、
+    Playwright の frame リストから URL マッチで見つける。
     """
+    try:
+        # 直接 frame(url=regex) を使う
+        frame = page.frame(url=_CF_FRAME_URL_PATTERN)
+        if frame:
+            return frame
+    except Exception:
+        pass
+    # フォールバック: 全 frame をスキャン
+    try:
+        for f in page.frames:
+            u = getattr(f, "url", "") or ""
+            if "challenges.cloudflare.com" in u:
+                return f
+    except Exception:
+        pass
+    return None
+
+
+def _try_click_turnstile(page) -> bool:
+    """Turnstile の checkbox を scrapling 流でクリックする。
+
+    優先順:
+      1. page.frame(url=CF_PATTERN) で iframe を探して、その frame_element の
+         bounding_box に対してクリック (scrapling 流)
+      2. 内側 div セレクタ (.cf-turnstile > div > div 等) で探す
+      3. 後方互換: 外側 .cf-turnstile div の左上
+    """
+    # (1) Playwright frame API で CF iframe を探す
+    try:
+        cf_frame = _find_cf_challenge_frame(page)
+        if cf_frame:
+            try:
+                frame_element = cf_frame.frame_element()
+                box = frame_element.bounding_box()
+                if box and box.get("width", 0) >= 20:
+                    # scrapling と同じ offset: (26~28, 25~27)px
+                    import random as _random
+                    target_x = box["x"] + _random.randint(26, 28)
+                    target_y = box["y"] + _random.randint(25, 27)
+                    log(f"[cf] CF frame found via page.frame(url=), box={box}, clicking ({target_x:.0f}, {target_y:.0f})")
+                    # 人間っぽいアプローチ
+                    page.mouse.move(target_x - 60, target_y - 20, steps=15)
+                    time.sleep(0.15)
+                    page.mouse.move(target_x, target_y, steps=10)
+                    time.sleep(0.1)
+                    # click with delay (scrapling 流)
+                    page.mouse.click(target_x, target_y, delay=_random.randint(100, 200), button="left")
+                    return True
+            except Exception as e:
+                log(f"[cf] frame_element bounding_box failed: {e}")
+    except Exception as e:
+        log(f"[cf] frame lookup exception: {e}")
+
+    # (2) 内側 div セレクタで探す
+    for sel in _CF_INNER_BOX_SELECTORS:
+        try:
+            el = page.query_selector(sel)
+            if not el:
+                continue
+            try:
+                el.scroll_into_view_if_needed(timeout=2000)
+                time.sleep(0.2)
+            except Exception:
+                pass
+            box = el.bounding_box()
+            if not box or box.get("width", 0) < 20:
+                continue
+            import random as _random
+            target_x = box["x"] + _random.randint(26, 28)
+            target_y = box["y"] + _random.randint(25, 27)
+            log(f"[cf] inner box found via {sel!r}, box={box}, clicking ({target_x:.0f}, {target_y:.0f})")
+            page.mouse.move(target_x - 60, target_y - 20, steps=15)
+            time.sleep(0.15)
+            page.mouse.move(target_x, target_y, steps=10)
+            time.sleep(0.1)
+            page.mouse.click(target_x, target_y, delay=_random.randint(100, 200), button="left")
+            return True
+        except Exception as e:
+            log(f"[cf] inner selector {sel!r} exception: {e}")
+            continue
+
+    # (3) フォールバック: 外側 .cf-turnstile div の左上をクリック
     try:
         el, sel = _find_turnstile_element(page)
         if not el:
@@ -345,23 +527,15 @@ def _try_click_turnstile(page) -> bool:
         box = el.bounding_box()
         if not box or box.get("width", 0) < 20:
             return False
-        # widget div なら中心、iframe なら左上 (27, 28)px
-        is_iframe = sel and "iframe" in sel
-        if is_iframe:
-            target_x = box["x"] + 27
-            target_y = box["y"] + 28
-        else:
-            # ウィジェット div の場合も左側にチェックボックスがある
-            target_x = box["x"] + min(30, box["width"] / 2)
-            target_y = box["y"] + box["height"] / 2
-        log(f"[cf] Turnstile widget matched by {sel!r} at box={box}, clicking (~{target_x:.0f}, {target_y:.0f})")
+        import random as _random
+        target_x = box["x"] + _random.randint(26, 28)
+        target_y = box["y"] + _random.randint(25, 27)
+        log(f"[cf] fallback outer widget {sel!r}, box={box}, clicking ({target_x:.0f}, {target_y:.0f})")
         page.mouse.move(target_x - 60, target_y - 20, steps=15)
-        time.sleep(0.2)
-        page.mouse.move(target_x, target_y, steps=10)
         time.sleep(0.15)
-        page.mouse.down()
-        time.sleep(0.08)
-        page.mouse.up()
+        page.mouse.move(target_x, target_y, steps=10)
+        time.sleep(0.1)
+        page.mouse.click(target_x, target_y, delay=_random.randint(100, 200), button="left")
         return True
     except Exception as e:
         log(f"[cf] click attempt exception: {e}")
@@ -403,47 +577,34 @@ def _solve_turnstile(page, max_seconds: float = 30.0) -> bool:
         pass
 
     if iframe_missing:
-        log("[cf] iframe is missing — attempting recovery")
+        log("[cf] iframe is missing — attempting recovery (likely invisible mode)")
         # (1) api.js がないなら入れる
         _try_inject_turnstile_script(page)
         time.sleep(2.0)
         # (2) window.turnstile.render() を手動で呼ぶ
-        rendered = _try_force_render_turnstile(page)
-        if rendered:
-            log("[cf] force-render succeeded, waiting for iframe to appear")
-            for _ in range(20):  # 最大 10s
-                time.sleep(0.5)
+        widget_id = _try_force_render_turnstile(page)
+        if widget_id is not None:
+            log(f"[cf] force-render succeeded (widget id={widget_id!r})")
+            # (3) invisible mode を想定して execute() を明示的に呼ぶ
+            time.sleep(1.0)
+            _try_execute_invisible_turnstile(page, widget_id)
+            # (4) 15s poll: callback / getResponse / input を全方位で探す
+            wait_end = min(deadline, time.time() + 15.0)
+            while time.time() < wait_end:
+                token = _read_cf_token_all(page)
+                if token:
+                    log(f"[cf] token acquired after force-render+execute (len={len(token)})")
+                    _propagate_cf_token(page, token)
+                    return True
+                # エラーが発生してたらログに出して抜ける
                 try:
-                    got_iframe = page.evaluate(
-                        "() => !!document.querySelector('iframe[src*=\"challenges.cloudflare.com\"]')"
-                    )
-                    if got_iframe:
-                        log("[cf] iframe injected after force render")
+                    err = page.evaluate("() => window.__cfError || ''")
+                    if err:
+                        log(f"[cf] error-callback fired: {err}")
                         break
                 except Exception:
                     pass
-            # トークンが callback で入ったか確認
-            for _ in range(10):
                 time.sleep(0.5)
-                try:
-                    cb_token = page.evaluate("() => window.__cfToken || ''")
-                    if cb_token and len(cb_token) > 20:
-                        log(f"[cf] token received via callback (len={len(cb_token)})")
-                        # 隠し input にも入れておく
-                        try:
-                            page.evaluate(
-                                "(t) => { document.querySelectorAll('input[name=\"cf-turnstile-response\"]').forEach(e => e.value = t); }",
-                                cb_token,
-                            )
-                        except Exception:
-                            pass
-                        return True
-                except Exception:
-                    pass
-                token = _read_turnstile_token(page)
-                if token:
-                    log(f"[cf] token issued after force render (len={len(token)})")
-                    return True
         else:
             log("[cf] force-render failed, falling through to click attempts")
         _log_turnstile_dom_state(page)
