@@ -50,6 +50,36 @@ _load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 
 # ---------------------------------------------------------------------------
+# PROXY_SERVER 正規化
+# ---------------------------------------------------------------------------
+# host:port:user:pass 形式を scheme://user:pass@host:port に変換する。
+def _normalize_proxy(raw):
+    if not raw:
+        return raw
+    s = raw.strip()
+    if not s:
+        return None
+    if "://" in s:
+        scheme, rest = s.split("://", 1)
+    else:
+        scheme, rest = "http", s
+    if "@" in rest:
+        return f"{scheme}://{rest}"
+    parts = rest.split(":")
+    if len(parts) == 4:
+        host, port, user, pw = parts
+        return f"{scheme}://{user}:{pw}@{host}:{port}"
+    return f"{scheme}://{rest}"
+
+
+# 環境変数を早めに正規化しておく (curl / cloakbrowser 両方が正しい値を見るように)
+_raw = os.environ.get("PROXY_SERVER")
+_norm = _normalize_proxy(_raw)
+if _raw and _norm and _norm != _raw.strip():
+    os.environ["PROXY_SERVER"] = _norm
+
+
+# ---------------------------------------------------------------------------
 # ログ
 # ---------------------------------------------------------------------------
 def p(msg: str, ok: bool | None = None) -> None:

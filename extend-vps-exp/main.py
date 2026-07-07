@@ -49,6 +49,49 @@ _load_dotenv(os.path.join(BASE_DIR, ".env"))
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s")
 log = logging.getLogger("xserver-renew").info
 
+
+# ---------------------------------------------------------------------------
+# PROXY_SERVER 正規化
+# ---------------------------------------------------------------------------
+# 住宅プロキシで良く見る「host:port:user:pass」形式を、
+# 標準の URL 形式 (scheme://user:pass@host:port) に自動変換する。
+#
+# 対応例:
+#   http://142.111.67.146:5611:cfvsvqyn:qhyrc0uaykta
+#     -> http://cfvsvqyn:qhyrc0uaykta@142.111.67.146:5611
+#   142.111.67.146:5611:cfvsvqyn:qhyrc0uaykta          (scheme 省略)
+#     -> http://cfvsvqyn:qhyrc0uaykta@142.111.67.146:5611
+#   http://user:pass@host:port                        (既に標準形式)
+#     -> そのまま
+def _normalize_proxy(raw: str | None) -> str | None:
+    if not raw:
+        return raw
+    s = raw.strip()
+    if not s:
+        return None
+
+    # scheme 分離
+    if "://" in s:
+        scheme, rest = s.split("://", 1)
+    else:
+        scheme, rest = "http", s
+
+    # 既に user:pass@host:port ならそのまま
+    if "@" in rest:
+        return f"{scheme}://{rest}"
+
+    parts = rest.split(":")
+    # host:port:user:pass  (コロン 4 つ)
+    if len(parts) == 4:
+        host, port, user, pw = parts
+        return f"{scheme}://{user}:{pw}@{host}:{port}"
+    # host:port  (認証なし)
+    if len(parts) == 2:
+        return f"{scheme}://{rest}"
+
+    # それ以外はいじらない (不正なら至上流でエラーになる)
+    return f"{scheme}://{rest}"
+
 LOGIN_URL = "https://secure.xserver.ne.jp/xapanel/login/xvps/"
 
 
@@ -400,7 +443,10 @@ def main() -> int:
         "viewport": {"width": 1280, "height": 900},
         "args": stealth_args,
     }
-    proxy = os.environ.get("PROXY_SERVER")
+    raw_proxy = os.environ.get("PROXY_SERVER")
+    proxy = _normalize_proxy(raw_proxy)
+    if proxy and raw_proxy and proxy != raw_proxy.strip():
+        log("[proxy] normalized 'host:port:user:pass' style -> standard URL")
     if proxy:
         # プロキシ URL の user:pass 部分はログに出さない
         try:
