@@ -8,6 +8,7 @@
 #   bash extend-vps-exp/vps_setup.sh --install  # install only
 #   bash extend-vps-exp/vps_setup.sh --run      # run only (installs if needed)
 #   bash extend-vps-exp/vps_setup.sh --cron     # register daily cron job
+#   bash extend-vps-exp/vps_setup.sh --uncron   # remove daily cron job
 #
 # Supports Debian/Ubuntu on x86_64 and aarch64. Idempotent — re-runnable safely.
 #
@@ -214,6 +215,96 @@ install_system_packages() {
 }
 
 # ------------------------------------------------------------------
+# Discord webhook notification (edit-in-place / upsert pattern)
+# ------------------------------------------------------------------
+# If the environment variable `Discord` contains a webhook URL, send a status
+# embed after each run. The very first message ID is stored under
+# `${INSTALL_DIR}/discord_msg_id` and subsequent runs PATCH that same message
+# so the channel never spams — you get one “VPS Auto Update” status card
+# that keeps refreshing in place.
+#
+# Compatible with plain Discord webhook URLs (e.g.
+# https://discord.com/api/webhooks/<id>/<token>). No jq required.
+notify_discord() {
+  local rc="$1"
+  local url="${Discord:-}"
+  [ -z "$url" ] && return 0
+  have curl || { warn "Discord notify skipped: curl missing"; return 0; }
+
+  local status_text color emoji
+  if [ "$rc" = "0" ]; then
+    status_text="Success"
+    emoji="✅"
+    color=3066993   # green
+  else
+    status_text="Failed"
+    emoji="❌"
+    color=15158332  # red
+  fi
+
+  local ts host_name
+  ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  host_name=$(hostname 2>/dev/null || echo "unknown")
+
+  # Minimal JSON escape for the two dynamic string fields (hostname / rc).
+  local host_esc rc_esc
+  host_esc=$(printf '%s' "$host_name" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  rc_esc=$(printf '%s' "$rc" | sed 's/[^0-9-]//g')
+
+  local payload
+  payload=$(cat <<JSON
+{
+  "username": "VPS Auto Update",
+  "embeds": [{
+    "title": "VPS Auto Update",
+    "color": ${color},
+    "fields": [
+      {"name": "Status", "value": "${emoji} ${status_text}", "inline": true},
+      {"name": "Exit Code", "value": "${rc_esc}", "inline": true},
+      {"name": "Host", "value": "${host_esc}", "inline": true}
+    ],
+    "footer": {"text": "VPS Auto Update"},
+    "timestamp": "${ts}"
+  }]
+}
+JSON
+)
+
+  local msg_id_file="${INSTALL_DIR}/discord_msg_id"
+  local msg_id=""
+  [ -f "$msg_id_file" ] && msg_id=$(head -n1 "$msg_id_file" 2>/dev/null | tr -d '[:space:]')
+
+  # Try PATCH first if we already have a message ID.
+  if [ -n "$msg_id" ]; then
+    local http_code
+    http_code=$(curl -sS -o /tmp/discord_resp.json -w "%{http_code}" \
+      -X PATCH "${url}/messages/${msg_id}" \
+      -H "Content-Type: application/json" \
+      -d "$payload" 2>/dev/null || echo "000")
+    if [ "$http_code" = "200" ]; then
+      log "Discord message updated (id=${msg_id})"
+      return 0
+    fi
+    warn "Discord PATCH failed (http=${http_code}); will post a new message"
+    rm -f "$msg_id_file"
+  fi
+
+  # POST a fresh message and remember its ID so future runs can PATCH it.
+  local resp
+  resp=$(curl -sS -X POST "${url}?wait=true" \
+    -H "Content-Type: application/json" \
+    -d "$payload" 2>/dev/null || echo "")
+  msg_id=$(printf '%s' "$resp" | grep -oE '"id"[[:space:]]*:[[:space:]]*"[0-9]+"' | head -n1 | grep -oE '[0-9]+' || echo "")
+  if [ -n "$msg_id" ]; then
+    mkdir -p "$INSTALL_DIR" 2>/dev/null || true
+    printf '%s\n' "$msg_id" > "$msg_id_file"
+    log "Discord message sent (id=${msg_id})"
+  else
+    warn "Discord send failed or no message ID returned"
+  fi
+}
+
+# ------------------------------------------------------------------
 # Install
 # ------------------------------------------------------------------
 do_install() {
@@ -350,6 +441,12 @@ PASSWORD=your-password
 
 # Optional: HTTP/HTTPS/SOCKS5 proxy (residential IP recommended for anti-bot).
 # PROXY_SERVER=socks5://user:pass@host:port
+
+# Optional: Discord webhook URL. If set, vps_setup.sh posts a status embed
+# after each run (green on success, red on failure). The webhook name and
+# embed title are both "VPS Auto Update". Subsequent runs edit the same
+# message instead of spamming, so you always see one live status card.
+# Discord=https://discord.com/api/webhooks/<id>/<token>
 EOF
     chmod 600 "$APP_DIR/.env"
     warn ".env template created at $APP_DIR/.env — edit before first run"
@@ -409,9 +506,15 @@ do_run() {
   fi
 
   log "$(date -Is) starting main.py"
+  set +e
   python main.py
   local rc=$?
+  set -e
   log "$(date -Is) main.py exited rc=$rc"
+
+  # Discord notification (no-op unless $Discord is set in .env / env).
+  notify_discord "$rc" || true
+
   return $rc
 }
 
@@ -440,18 +543,51 @@ do_cron() {
   log "logs: tail -f ${INSTALL_DIR}/cron.log"
 }
 
+# Remove any cron line that carries our marker. Also drops the Discord
+# message-ID cache so a fresh --cron run starts with a new status card.
+do_uncron() {
+  local marker="# xserver-auto-renew (managed by vps_setup.sh)"
+  local current
+  current=$(crontab -l 2>/dev/null || true)
+  if [ -z "$current" ]; then
+    log "no crontab for current user; nothing to remove"
+    return 0
+  fi
+  if ! echo "$current" | grep -Fq "$marker"; then
+    log "no managed cron entry found (marker not present)"
+    return 0
+  fi
+
+  printf '%s\n' "$current" | grep -vF "$marker" > /tmp/.crontab.new
+  # Install the filtered crontab; empty file = wipe crontab entirely.
+  if [ -s /tmp/.crontab.new ]; then
+    crontab /tmp/.crontab.new
+  else
+    crontab -r 2>/dev/null || true
+  fi
+  rm -f /tmp/.crontab.new
+  log "managed cron entry removed"
+
+  # Clear the Discord upsert cache so next run posts a fresh message.
+  if [ -f "${INSTALL_DIR}/discord_msg_id" ]; then
+    rm -f "${INSTALL_DIR}/discord_msg_id"
+    log "cleared Discord message-ID cache"
+  fi
+}
+
 # ------------------------------------------------------------------
 # Entry point
 # ------------------------------------------------------------------
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--install|--run|--cron|--help]
+Usage: $(basename "$0") [--install|--run|--cron|--uncron|--help]
 
 Without arguments: install (if needed) then run.
 
   --install   Install/update dependencies only, do not run.
   --run       Run main.py (installs first if never installed).
   --cron      Register a daily cron job (see CRON_TIME env var).
+  --uncron    Remove the managed cron job and Discord message cache.
   --help      Show this help.
 
 Env overrides:
@@ -459,15 +595,17 @@ Env overrides:
   REPO_URL      (default: https://github.com/gamelist1990/Debug.git)
   CRON_TIME     (default: '0 3 * * *')
   TF_VERSION    (default: 2.19.0)
+  Discord       (webhook URL; enables status embed \"VPS Auto Update\")
 EOF
 }
 
 mode="${1:-auto}"
 case "$mode" in
-  --install) do_install ;;
-  --run)     do_run ;;
-  --cron)    do_cron ;;
-  --help|-h) usage ;;
-  auto)      do_install; do_run ;;
+  --install)              do_install ;;
+  --run)                  do_run ;;
+  --cron)                 do_cron ;;
+  --uncron|--cron-remove) do_uncron ;;
+  --help|-h)              usage ;;
+  auto)                   do_install; do_run ;;
   *) usage; exit 1 ;;
 esac

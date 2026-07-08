@@ -219,39 +219,6 @@ def _read_turnstile_token(page) -> str:
         return ""
 
 
-# Turnstile widget / iframe を探すセレクタ群。後ろだと弱い候補になるように並べている。
-_TURNSTILE_SELECTORS = [
-    "iframe[src*='challenges.cloudflare.com']",
-    "iframe[src*='turnstile']",
-    "iframe[title*='Cloudflare']",
-    "iframe[title*='Widget containing']",
-    "iframe[title*='challenge']",
-    ".cf-turnstile",
-    "[data-sitekey]",
-]
-
-
-def _find_turnstile_element(page):
-    """Turnstile widget を見つけて (element, selector) を返す。"""
-    for sel in _TURNSTILE_SELECTORS:
-        try:
-            el = page.query_selector(sel)
-            if el:
-                # サイズが 0 の widget は隠しフィールドなのでスキップ
-                box = el.bounding_box()
-                if box and box.get("width", 0) >= 20 and box.get("height", 0) >= 20:
-                    return el, sel
-        except Exception:
-            continue
-    return None, None
-
-
-# 後方互換のためのエイリアス
-def _find_turnstile_iframe(page):
-    el, _ = _find_turnstile_element(page)
-    return el
-
-
 def _log_turnstile_dom_state(page) -> None:
     """デバッグ用: Turnstile と iframe の状態をログに出す。"""
     try:
@@ -283,6 +250,11 @@ def _try_force_render_turnstile(page) -> str | None:
     """api.js はロードされているのに iframe が生えない場合、
     手動で turnstile.render() を呼んでやる。
 
+    重要: widget の data-callback (サイト本来の callback 関数名) を保存しておき、
+    自分の callback からもチェーン呼び出しする。これをしないとサイトのフォーム側の
+    JS (submit ボタンの disabled 解除実行等) が発火せず、ボタンが永遠に
+    クリック不能になる。
+
     戻り値: 成功時は widget ID (文字列)、失敗時は None。
     """
     try:
@@ -293,24 +265,30 @@ def _try_force_render_turnstile(page) -> str | None:
             "  if (!widget) return {ok:false, reason:'no_widget'};"
             "  const sitekey = widget.getAttribute('data-sitekey');"
             "  if (!sitekey) return {ok:false, reason:'no_sitekey'};"
+            "  /* サイト本来の callback 名を保存 (あとでチェーン呼び出し) */"
+            "  const siteCbName = widget.getAttribute('data-callback');"
             "  window.__cfToken = '';"
             "  window.__cfError = '';"
-            "  window.__cfWidgetId = '';"
+            "  window.__cfSiteCbError = '';"
+            "  window.__cfSiteCbName = siteCbName;"
             "  try {"
-            "    /* 既存の render を削除してクリーンな状態にする */"
-            "    try { widget.innerHTML = ''; } catch(_){}"
             "    const opts = {"
             "      sitekey: sitekey,"
-            "      callback: (t) => { window.__cfToken = t; },"
+            "      callback: (t) => {"
+            "        window.__cfToken = t;"
+            "        /* ★ サイト本来の callback もチェーン呼び出し (submit ボタンを enable にする) */"
+            "        if (siteCbName && typeof window[siteCbName] === 'function') {"
+            "          try { window[siteCbName](t); }"
+            "          catch (e) { window.__cfSiteCbError = String(e); }"
+            "        }"
+            "      },"
             "      'error-callback': (e) => { window.__cfError = String(e); },"
             "      'expired-callback': () => { window.__cfToken = ''; },"
             "    };"
-            "    /* サイト側が invisible を期待してる場合に備えて size を採用 */"
             "    const dataSize = widget.getAttribute('data-size');"
             "    if (dataSize) opts.size = dataSize;"
             "    const id = window.turnstile.render(widget, opts);"
-            "    window.__cfWidgetId = String(id);"
-            "    return {ok:true, id: String(id), size: dataSize||'normal'};"
+            "    return {ok:true, id: String(id), siteCallback: siteCbName};"
             "  } catch (e) { return {ok:false, reason:'render_error', err: String(e)}; }"
             "}"
         )
@@ -323,108 +301,10 @@ def _try_force_render_turnstile(page) -> str | None:
         return None
 
 
-def _try_execute_invisible_turnstile(page, widget_id: str) -> None:
-    """invisible mode の Turnstile は render だけでは発火せず、
-    turnstile.execute() を明示的に呼ばないと token が生えない。
-    """
-    try:
-        result = page.evaluate(
-            "(id) => {"
-            "  try {"
-            "    if (id && typeof window.turnstile.execute === 'function') {"
-            "      window.turnstile.execute(id);"
-            "      return {ok:true, mode:'id'};"
-            "    }"
-            "    const widget = document.querySelector('.cf-turnstile');"
-            "    if (widget && typeof window.turnstile.execute === 'function') {"
-            "      window.turnstile.execute(widget);"
-            "      return {ok:true, mode:'widget'};"
-            "    }"
-            "    return {ok:false, reason:'no_execute'};"
-            "  } catch (e) { return {ok:false, err:String(e)}; }"
-            "}",
-            widget_id or "",
-        )
-        log(f"[cf] execute() result: {result}")
-    except Exception as e:
-        log(f"[cf] execute exception: {e}")
-
-
-def _read_cf_token_all(page) -> str:
-    """callback ・window.__cfToken・getResponse()・隠し input を全部見てトークンを探す。"""
-    # 1. callback で保存されたトークン
-    try:
-        t = page.evaluate("() => window.__cfToken || ''") or ""
-        if t and len(t) > 20:
-            return t
-    except Exception:
-        pass
-    # 2. turnstile.getResponse(widgetId) or getResponse()
-    try:
-        t = page.evaluate(
-            "() => {"
-            "  if (typeof window.turnstile === 'undefined') return '';"
-            "  try { const r = window.turnstile.getResponse(window.__cfWidgetId || undefined); if (r) return r; } catch(_){}"
-            "  try { const r = window.turnstile.getResponse(); if (r) return r; } catch(_){}"
-            "  return '';"
-            "}"
-        ) or ""
-        if t and len(t) > 20:
-            return t
-    except Exception:
-        pass
-    # 3. 隠し input
-    return _read_turnstile_token(page)
-
-
-def _propagate_cf_token(page, token: str) -> None:
-    """取得した token をページ内のすべての cf-turnstile-response input に入れる。"""
-    try:
-        page.evaluate(
-            "(t) => { document.querySelectorAll('input[name=\"cf-turnstile-response\"]').forEach(e => { e.value = t; e.dispatchEvent(new Event('change', {bubbles: true})); }); }",
-            token,
-        )
-    except Exception:
-        pass
-
-
-def _try_inject_turnstile_script(page) -> bool:
-    """Turnstile の api.js がロードされてないなら注入する。"""
-    try:
-        result = page.evaluate(
-            "() => new Promise((resolve) => {"
-            "  if (typeof window.turnstile !== 'undefined') { resolve({ok:true, already:true}); return; }"
-            "  const existing = document.querySelector('script[src*=\"turnstile\"]');"
-            "  if (existing) { resolve({ok:true, existing:true}); return; }"
-            "  const s = document.createElement('script');"
-            "  s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';"
-            "  s.async = true; s.defer = true;"
-            "  s.onload = () => resolve({ok:true, loaded:true});"
-            "  s.onerror = (e) => resolve({ok:false, err:'load_failed'});"
-            "  document.head.appendChild(s);"
-            "  setTimeout(() => resolve({ok:false, err:'timeout'}), 10000);"
-            "})"
-        )
-        log(f"[cf] inject api.js result: {result}")
-        return bool(result and result.get("ok"))
-    except Exception as e:
-        log(f"[cf] inject exception: {e}")
-        return False
-
-
 # scrapling 流: CF challenge iframe は document.querySelectorAll('iframe') では
 # 見えないことがある (Shadow iframe / closed frame)。page.frame(url=regex) だけ
 # が見つけられる。
 _CF_FRAME_URL_PATTERN = re.compile(r"^https?://challenges\.cloudflare\.com/cdn-cgi/challenge-platform/.*")
-
-# Turnstile widget の内側 div を探すセレクタ (scrapling 流)
-# .cf-turnstile > div > div が実際のチェックボックスを含む内側ボックス
-_CF_INNER_BOX_SELECTORS = [
-    "#cf_turnstile div",
-    "#cf-turnstile div",
-    ".cf-turnstile > div > div",
-    ".turnstile > div > div",
-]
 
 
 def _find_cf_challenge_frame(page):
@@ -454,56 +334,24 @@ def _find_cf_challenge_frame(page):
 def _try_click_turnstile(page) -> bool:
     """Turnstile の checkbox を scrapling 流でクリックする。
 
-    優先順:
-      1. page.frame(url=CF_PATTERN) で iframe を探して、その frame_element の
-         bounding_box に対してクリック (scrapling 流)
-      2. 内側 div セレクタ (.cf-turnstile > div > div 等) で探す
-      3. 後方互換: 外側 .cf-turnstile div の左上
+    page.frame(url=CF_PATTERN) で iframe を見つけて、その frame_element の
+    bounding_box に対してクリックする (scrapling 流)。
     """
-    # (1) Playwright frame API で CF iframe を探す
     try:
         cf_frame = _find_cf_challenge_frame(page)
-        if cf_frame:
-            try:
-                frame_element = cf_frame.frame_element()
-                box = frame_element.bounding_box()
-                if box and box.get("width", 0) >= 20:
-                    # scrapling と同じ offset: (26~28, 25~27)px
-                    import random as _random
-                    target_x = box["x"] + _random.randint(26, 28)
-                    target_y = box["y"] + _random.randint(25, 27)
-                    log(f"[cf] CF frame found via page.frame(url=), box={box}, clicking ({target_x:.0f}, {target_y:.0f})")
-                    # 人間っぽいアプローチ
-                    page.mouse.move(target_x - 60, target_y - 20, steps=15)
-                    time.sleep(0.15)
-                    page.mouse.move(target_x, target_y, steps=10)
-                    time.sleep(0.1)
-                    # click with delay (scrapling 流)
-                    page.mouse.click(target_x, target_y, delay=_random.randint(100, 200), button="left")
-                    return True
-            except Exception as e:
-                log(f"[cf] frame_element bounding_box failed: {e}")
-    except Exception as e:
-        log(f"[cf] frame lookup exception: {e}")
-
-    # (2) 内側 div セレクタで探す
-    for sel in _CF_INNER_BOX_SELECTORS:
+        if not cf_frame:
+            return False
         try:
-            el = page.query_selector(sel)
-            if not el:
-                continue
-            try:
-                el.scroll_into_view_if_needed(timeout=2000)
-                time.sleep(0.2)
-            except Exception:
-                pass
-            box = el.bounding_box()
+            frame_element = cf_frame.frame_element()
+            box = frame_element.bounding_box()
             if not box or box.get("width", 0) < 20:
-                continue
+                return False
+            # scrapling と同じ offset: (26~28, 25~27)px
             import random as _random
             target_x = box["x"] + _random.randint(26, 28)
             target_y = box["y"] + _random.randint(25, 27)
-            log(f"[cf] inner box found via {sel!r}, box={box}, clicking ({target_x:.0f}, {target_y:.0f})")
+            log(f"[cf] CF frame found via page.frame(url=), box={box}, clicking ({target_x:.0f}, {target_y:.0f})")
+            # 人間っぽいアプローチ + click with delay (scrapling 流)
             page.mouse.move(target_x - 60, target_y - 20, steps=15)
             time.sleep(0.15)
             page.mouse.move(target_x, target_y, steps=10)
@@ -511,32 +359,8 @@ def _try_click_turnstile(page) -> bool:
             page.mouse.click(target_x, target_y, delay=_random.randint(100, 200), button="left")
             return True
         except Exception as e:
-            log(f"[cf] inner selector {sel!r} exception: {e}")
-            continue
-
-    # (3) フォールバック: 外側 .cf-turnstile div の左上をクリック
-    try:
-        el, sel = _find_turnstile_element(page)
-        if not el:
+            log(f"[cf] frame_element bounding_box failed: {e}")
             return False
-        try:
-            el.scroll_into_view_if_needed(timeout=3000)
-            time.sleep(0.3)
-        except Exception:
-            pass
-        box = el.bounding_box()
-        if not box or box.get("width", 0) < 20:
-            return False
-        import random as _random
-        target_x = box["x"] + _random.randint(26, 28)
-        target_y = box["y"] + _random.randint(25, 27)
-        log(f"[cf] fallback outer widget {sel!r}, box={box}, clicking ({target_x:.0f}, {target_y:.0f})")
-        page.mouse.move(target_x - 60, target_y - 20, steps=15)
-        time.sleep(0.15)
-        page.mouse.move(target_x, target_y, steps=10)
-        time.sleep(0.1)
-        page.mouse.click(target_x, target_y, delay=_random.randint(100, 200), button="left")
-        return True
     except Exception as e:
         log(f"[cf] click attempt exception: {e}")
         return False
@@ -590,38 +414,21 @@ def _solve_turnstile(page, cap=None, max_seconds: float = 30.0) -> bool:
         pass
 
     if iframe_missing:
-        log("[cf] iframe is missing — attempting recovery (likely invisible mode)")
+        log("[cf] iframe is missing — forcing render with site-callback chain")
         _snap("cf_iframe_missing")
-        # (1) api.js がないなら入れる
-        _try_inject_turnstile_script(page)
-        time.sleep(2.0)
-        # (2) window.turnstile.render() を手動で呼ぶ
+        # 手動 render (サイト内の data-callback をチェーン到入する)
         widget_id = _try_force_render_turnstile(page)
         if widget_id is not None:
             log(f"[cf] force-render succeeded (widget id={widget_id!r})")
             _snap("cf_after_render")
-            # (3) invisible mode を想定して execute() を明示的に呼ぶ
-            time.sleep(1.0)
-            _try_execute_invisible_turnstile(page, widget_id)
-            _snap("cf_after_execute")
-            # (4) 15s poll: callback / getResponse / input を全方位で探す
-            wait_end = min(deadline, time.time() + 15.0)
+            # クリック前に一度だけ iframe が生えるのを 3s 待つ (すぐに passive で解けるケースもある)
+            wait_end = min(deadline, time.time() + 3.0)
             while time.time() < wait_end:
-                token = _read_cf_token_all(page)
+                token = _read_turnstile_token(page)
                 if token:
-                    log(f"[cf] token acquired after force-render+execute (len={len(token)})")
-                    _propagate_cf_token(page, token)
+                    log(f"[cf] token acquired after force-render passive (len={len(token)})")
                     _snap("cf_token_render")
                     return True
-                # エラーが発生してたらログに出して抜ける
-                try:
-                    err = page.evaluate("() => window.__cfError || ''")
-                    if err:
-                        log(f"[cf] error-callback fired: {err}")
-                        _snap("cf_error_callback")
-                        break
-                except Exception:
-                    pass
                 time.sleep(0.5)
         else:
             log("[cf] force-render failed, falling through to click attempts")
@@ -892,17 +699,14 @@ def run_renewal(page, cap: FrameCapture) -> bool:
         log("[warn] Turnstile token not observed — submitting anyway")
 
     # ---- Submit ----
-    # Turnstile の token が取れても、ページ側 JS が token を検知して submit
-    # ボタンを enable にするまでにタイムラグがある。disabled / aria-disabled /
-    # スピナー (.btn--loading の running 状態) をチェックしてボタンが本当に
-    # 押せる状態になってからクリックする。
+    # Turnstile の callback チェーンが場発火していれば、サイト側 JS が自動で
+    # ボタンの disabled を解除する。それを disabled 属性 poll で確認してからクリック。
+    # ※ btn--loading は xserver の全ボタンに常時付く装飾クラスなので無視する。
     import random
 
     submit = page.get_by_role("button", name="無料VPSの利用を継続する").first
 
-    # ※ btn--loading は xserver の全ボタンに常時付いている装飾クラスで、
-    #   「loading 中」を意味しない。disabled 属性だけ見る。
-    log("waiting for submit button to become truly enabled…")
+    log("waiting for submit button to become enabled…")
     submit_ready = False
     poll_deadline = time.time() + 15.0
     while time.time() < poll_deadline:
@@ -913,8 +717,7 @@ def run_renewal(page, cap: FrameCapture) -> bool:
                 "  const target = btns.find(b => (b.textContent || '').includes('無料VPSの利用を継続する'));"
                 "  if (!target) return {found: false};"
                 "  const disabled = target.hasAttribute('disabled') || target.getAttribute('aria-disabled') === 'true';"
-                "  const rect = target.getBoundingClientRect();"
-                "  return {found: true, disabled, cls: target.className||'', tag: target.tagName, w: rect.width, h: rect.height};"
+                "  return {found: true, disabled};"
                 "}"
             ) or {}
             if state.get("found") and not state.get("disabled"):
@@ -926,85 +729,35 @@ def run_renewal(page, cap: FrameCapture) -> bool:
             log(f"[submit] state probe failed: {e}")
         time.sleep(0.5)
 
+    # セーフティネット: サイト JS が何らかの理由で発火しなかった場合のみ手動で callback を呼ぶ。
+    # force_render でチェーンしているので基本はここには入らないはず。
     if not submit_ready:
-        log("[submit] button still disabled — attempting forced enable + callback trigger")
+        log("[submit] button still disabled — firing site callback as safety net")
         try:
             forced = page.evaluate(
                 "() => {"
                 "  const result = {steps: []};"
-                "  const btns = Array.from(document.querySelectorAll('button, a.btn'));"
-                "  const target = btns.find(b => (b.textContent || '').includes('無料VPSの利用を継続する'));"
-                "  if (!target) return {ok:false, reason:'no_target'};"
-                "  /* (1) widget の data-callback を探して呼んでみる */"
                 "  const widget = document.querySelector('.cf-turnstile');"
                 "  const cbName = widget ? widget.getAttribute('data-callback') : null;"
                 "  result.callbackName = cbName;"
                 "  const token = window.__cfToken || '';"
+                "  result.hasToken = !!token;"
                 "  if (cbName && typeof window[cbName] === 'function' && token) {"
-                "    try { window[cbName](token); result.steps.push('called_callback'); } catch (e) { result.callbackError = String(e); }"
+                "    try { window[cbName](token); result.steps.push('called_callback'); }"
+                "    catch (e) { result.callbackError = String(e); }"
                 "  }"
-                "  /* (2) disabled を強制的に外す */"
-                "  target.removeAttribute('disabled');"
-                "  target.removeAttribute('aria-disabled');"
-                "  result.steps.push('removed_disabled');"
-                "  /* (3) form があれば 直接 submit する選択肢もログに残す */"
-                "  const form = target.closest('form');"
-                "  result.hasForm = !!form;"
-                "  return {ok:true, ...result};"
+                "  return result;"
                 "}"
             ) or {}
-            log(f"[submit] forced enable result: {forced}")
+            log(f"[submit] safety-net fire result: {forced}")
         except Exception as e:
-            log(f"[submit] forced enable failed: {e}")
-
-        # (4) 強制 enable にした後、もう一度 disabled が外れたか確認
+            log(f"[submit] safety-net exception: {e}")
         time.sleep(1.5)
-        try:
-            recheck = page.evaluate(
-                "() => {"
-                "  const btns = Array.from(document.querySelectorAll('button, a.btn'));"
-                "  const target = btns.find(b => (b.textContent || '').includes('無料VPSの利用を継続する'));"
-                "  if (!target) return {found:false};"
-                "  return {found:true, disabled: target.hasAttribute('disabled') || target.getAttribute('aria-disabled') === 'true'};"
-                "}"
-            ) or {}
-            log(f"[submit] after force: {recheck}")
-            if recheck.get("found") and not recheck.get("disabled"):
-                submit_ready = True
-        except Exception:
-            pass
 
     # 少しランダムな pre-click delay
     time.sleep(0.8 + random.random() * 1.2)
     log("submitting")
-
-    click_ok = False
-    try:
-        _wait_and_click(submit, timeout_ms=15_000)
-        click_ok = True
-    except Exception as e:
-        log(f"[submit] normal click failed: {e}")
-
-    if not click_ok:
-        # フォールバック: JS で click() / form.submit()
-        log("[submit] fallback: JS click() then form.submit()")
-        try:
-            js_result = page.evaluate(
-                "() => {"
-                "  const btns = Array.from(document.querySelectorAll('button, a.btn'));"
-                "  const target = btns.find(b => (b.textContent || '').includes('無料VPSの利用を継続する'));"
-                "  if (!target) return {ok:false, reason:'no_target'};"
-                "  target.removeAttribute('disabled');"
-                "  try { target.click(); return {ok:true, via:'click'}; } catch (e) { }"
-                "  const form = target.closest('form');"
-                "  if (form) { form.submit(); return {ok:true, via:'form.submit'}; }"
-                "  return {ok:false, reason:'no_form'};"
-                "}"
-            )
-            log(f"[submit] JS fallback result: {js_result}")
-        except Exception as e:
-            log(f"[submit] JS fallback exception: {e}")
-
+    _wait_and_click(submit, timeout_ms=15_000)
     cap.snap(page, "submitted")
 
     # Wait for the server response page.
