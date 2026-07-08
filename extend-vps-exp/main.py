@@ -492,19 +492,202 @@ def _solve_turnstile(page, cap=None, max_seconds: float = 30.0) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# 更新不要ページ (.newApp__suspended) 検出
+# ---------------------------------------------------------------------------
+def _read_suspended_message(page) -> str:
+    """Return the suspended-banner text if present, else empty string.
+
+    XVPS の無料 VPS 更新フローでは、利用期限の 1 日前になるまで更新できず
+    ``<section class="newApp__suspended">`` が表示される。これは正常系
+    (更新不要) なので True を返して抜けたい。
+    """
+    try:
+        loc = page.locator(".newApp__suspended")
+        if loc.count() == 0:
+            return ""
+        txt = loc.first.inner_text(timeout=1_500) or ""
+        # Discord embed で読みやすいよう空白を潰す
+        txt = re.sub(r"\s+", " ", txt).strip()
+        return txt
+    except Exception:
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Discord webhook 通知 (Python 側 / upsert パターン)
+# ---------------------------------------------------------------------------
+# vps_setup.sh の notify_discord と挙動を合わせる。初回は POST してメッセージ
+# ID を discord_msg_id に保存、以降の実行では PATCH で同じメッセージを
+# 上書きしてチャンネルを埋め尽くさないようにする。
+#
+# status_code -> 色 / 絵文字 / タイトル のマッピング
+_DISCORD_STATUS_META = {
+    "renewed":           {"color": 3066993,  "emoji": "\u2705", "title": "更新完了"},
+    "not_yet_renewable": {"color": 3447003,  "emoji": "\u23f3", "title": "まだ更新不要"},
+    "already_renewed":   {"color": 3447003,  "emoji": "\u2139\ufe0f", "title": "更新対象外"},
+    "not_contracted":    {"color": 9807270,  "emoji": "\u26aa", "title": "未契約サービス"},
+    "captcha_failed":    {"color": 15158332, "emoji": "\u274c", "title": "CAPTCHA解決失敗"},
+    "captcha_wrong":     {"color": 15158332, "emoji": "\u274c", "title": "CAPTCHA不一致"},
+    "cf_rejected":       {"color": 15158332, "emoji": "\u274c", "title": "Cloudflare拒否"},
+    "exception":         {"color": 15158332, "emoji": "\U0001f4a5", "title": "予期せぬエラー"},
+}
+
+
+def _discord_msg_id_paths() -> list:
+    """discord_msg_id を保存/読出する可能性のあるパス一覧。
+
+    優先順位: 1) BASE_DIR/discord_msg_id (Python がデフォルトで書く場所)
+              2) BASE_DIR/../discord_msg_id (vps_setup.sh の INSTALL_DIR)
+    """
+    paths = [Path(BASE_DIR) / "discord_msg_id"]
+    paths.append(Path(BASE_DIR).parent / "discord_msg_id")
+    return paths
+
+
+def _notify_discord(rc: int, status_code: str, detail: str) -> None:
+    """Post/PATCH a Discord status embed. No-op if `Discord` env var is unset."""
+    import json
+    from urllib import request as _urlreq, error as _urlerr
+
+    webhook = os.environ.get("Discord") or os.environ.get("DISCORD_WEBHOOK")
+    if not webhook:
+        log("[discord] webhook not set — skipping notify")
+        return
+
+    meta = _DISCORD_STATUS_META.get(status_code, _DISCORD_STATUS_META["exception"])
+    ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        host_name = os.uname().nodename  # type: ignore[attr-defined]
+    except Exception:
+        host_name = os.environ.get("COMPUTERNAME") or "unknown"
+
+    embed = {
+        "title": f"VPS Auto Update \u2014 {meta['title']}",
+        "color": meta["color"],
+        "fields": [
+            {"name": "Status", "value": f"{meta['emoji']} {status_code}", "inline": True},
+            {"name": "Exit Code", "value": str(rc), "inline": True},
+            {"name": "Host", "value": host_name, "inline": True},
+        ],
+        "footer": {"text": "VPS Auto Update (main.py)"},
+        "timestamp": ts,
+    }
+    if detail:
+        # embed field は 1024 文字上限
+        embed["fields"].append({"name": "Detail", "value": detail[:1000], "inline": False})
+
+    payload = {"username": "VPS Auto Update", "embeds": [embed]}
+    payload_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    # ---- PATCH first if we have a cached ID ----
+    id_paths = _discord_msg_id_paths()
+    cached_id = ""
+    cached_from: Optional[Path] = None
+    for p in id_paths:
+        try:
+            if p.is_file():
+                cid = p.read_text(encoding="utf-8").strip()
+                if cid:
+                    cached_id = cid
+                    cached_from = p
+                    break
+        except Exception:
+            continue
+
+    if cached_id:
+        patch_url = webhook.rstrip("/") + f"/messages/{cached_id}"
+        req = _urlreq.Request(patch_url, data=payload_bytes, method="PATCH",
+                              headers={"Content-Type": "application/json"})
+        try:
+            with _urlreq.urlopen(req, timeout=10) as resp:
+                if 200 <= resp.status < 300:
+                    log(f"[discord] message updated (id={cached_id})")
+                    _mark_discord_notified()
+                    return
+                log(f"[discord] PATCH returned HTTP {resp.status}; will POST fresh")
+        except _urlerr.HTTPError as e:
+            log(f"[discord] PATCH HTTPError {e.code} — will POST fresh")
+            if cached_from is not None:
+                try:
+                    cached_from.unlink()
+                except Exception:
+                    pass
+        except Exception as e:
+            log(f"[discord] PATCH failed: {e} — will POST fresh")
+
+    # ---- POST a new message ----
+    post_url = webhook + ("&wait=true" if "?" in webhook else "?wait=true")
+    req = _urlreq.Request(post_url, data=payload_bytes, method="POST",
+                          headers={"Content-Type": "application/json"})
+    try:
+        with _urlreq.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+        data = json.loads(body) if body else {}
+        new_id = str(data.get("id") or "")
+        if new_id:
+            try:
+                id_paths[0].parent.mkdir(parents=True, exist_ok=True)
+                id_paths[0].write_text(new_id + "\n", encoding="utf-8")
+                log(f"[discord] message sent (id={new_id})")
+            except Exception as e:
+                log(f"[discord] sent but failed to cache id: {e}")
+        else:
+            log("[discord] POST succeeded but no message ID in response")
+        _mark_discord_notified()
+    except Exception as e:
+        log(f"[discord] POST failed: {e}")
+
+
+def _mark_discord_notified() -> None:
+    """bash 側の notify_discord が二重送信しないようマーカーを置く。"""
+    try:
+        (Path(BASE_DIR) / ".discord_notified_by_python").write_text(
+            datetime.utcnow().isoformat() + "\n", encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
 def _solve_captcha(page) -> Optional[str]:
     """Grab the base64 CAPTCHA image and run the local Keras solver."""
     MIN_PAYLOAD = 500
     img_src: Optional[str] = None
+
+    # 早期打ち切り: そもそも更新不要ページ (.newApp__suspended) に居るなら
+    # CAPTCHA は存在しない。60s の get_attribute タイムアウト暴発を防ぐ。
+    try:
+        if page.locator(".newApp__suspended").count() > 0:
+            log("[captcha] suspended page detected — no CAPTCHA to solve")
+            return None
+    except Exception:
+        pass
+
     try:
         page.wait_for_selector('img[src^="data:image"]', state="visible", timeout=15_000)
     except Exception as e:
         log(f"[captcha] no image visible: {e}")
+        # 15s 待っても img が生えない場合、そもそも <img> が DOM に無いなら
+        # 60s タイムアウトを避けるためここで諦める。
+        try:
+            if page.locator('img[src^="data:image"]').count() == 0:
+                log("[captcha] no <img> element at all — aborting solve")
+                return None
+        except Exception:
+            return None
 
     # Poll for a real, non-empty base64 payload — the site briefly renders an
     # empty img before filling in the actual data URL.
     for _ in range(40):
-        cand = page.locator('img[src^="data:image"]').first.get_attribute("src") or ""
+        try:
+            if page.locator('img[src^="data:image"]').count() == 0:
+                page.wait_for_timeout(500)
+                continue
+            cand = page.locator('img[src^="data:image"]').first.get_attribute(
+                "src", timeout=1_500
+            ) or ""
+        except Exception:
+            cand = ""
         if cand and "," in cand and len(cand.split(",", 1)[1]) >= MIN_PAYLOAD:
             img_src = cand
             break
@@ -533,8 +716,12 @@ def _solve_captcha(page) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Renewal flow (imperative, single attempt)
 # ---------------------------------------------------------------------------
-def run_renewal(page, cap: FrameCapture) -> bool:
-    """Return True if the renewal succeeded (or was not needed), False otherwise."""
+# run_renewal は (succeeded, status_code, detail) を返す。
+#   succeeded : プロセス終了コードに使う bool (True=exit 0)
+#   status_code: Discord embed 用のカテゴリ (renewed / not_yet_renewable / ...)
+#   detail    : Discord embed に載せる 1〜2 行の説明文
+def run_renewal(page, cap: FrameCapture) -> tuple:
+    """Return (succeeded, status_code, detail)."""
     log("navigating to login")
     page.goto(LOGIN_URL, wait_until="load", timeout=60_000)
     cap.snap(page, "login_page")
@@ -554,7 +741,7 @@ def run_renewal(page, cap: FrameCapture) -> bool:
         note = page.locator(".noteBar--info")
         if note.count() > 0 and "未契約のサービスです" in note.inner_text():
             log("[EXIT] service not contracted")
-            return True
+            return (True, "not_contracted", "未契約のサービスのため何もしません")
     except Exception as e:
         log(f"noteBar check error: {e}")
 
@@ -646,7 +833,21 @@ def run_renewal(page, cap: FrameCapture) -> bool:
     except Exception:
         log("[EXIT] 更新する button missing — already renewed or unavailable")
         cap.snap(page, "update_unavailable")
-        return True
+        return (True, "already_renewed",
+                "『更新する』ボタンが見当たりません。既に更新済みか、更新対象外の可能性があります。")
+
+    # 「更新する」直後に遷移するページで、まだ更新期間に入っていない場合は
+    # .newApp__suspended バナーが出る (例: "利用期限の1日前から更新手続きが可能")。
+    # ここで検出できれば正常系 (更新不要) として扱う。
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=10_000)
+    except Exception:
+        pass
+    suspended_msg = _read_suspended_message(page)
+    if suspended_msg:
+        log(f"[EXIT] update not available yet (post-更新する): {suspended_msg}")
+        cap.snap(page, "suspended_after_update")
+        return (True, "not_yet_renewable", suspended_msg)
 
     # 引き続き無料VPSの利用を継続する
     try:
@@ -657,26 +858,47 @@ def run_renewal(page, cap: FrameCapture) -> bool:
     except Exception:
         log("[EXIT] 継続 button missing")
         cap.snap(page, "continue_unavailable")
-        return True
+        # ボタンが無い場合も、実は suspended バナーが出ているだけかもしれない。
+        suspended_msg = _read_suspended_message(page)
+        if suspended_msg:
+            log(f"[EXIT] continue button missing because suspended: {suspended_msg}")
+            return (True, "not_yet_renewable", suspended_msg)
+        return (True, "already_renewed",
+                "『引き続き無料VPSの利用を継続する』ボタンが見当たりません。")
 
-    # Some plans show "not yet renewable" here — treat as success.
+    # クリック後の遷移を待つ
     try:
-        suspended = page.locator(".newApp__suspended")
-        if suspended.count() > 0:
-            log(f"[EXIT] update not available yet: {suspended.inner_text().strip()}")
-            cap.snap(page, "suspended")
-            return True
-    except Exception as e:
-        log(f"suspended check error: {e}")
+        page.wait_for_load_state("domcontentloaded", timeout=10_000)
+    except Exception:
+        pass
+    # Some plans show "not yet renewable" here — treat as success.
+    suspended_msg = _read_suspended_message(page)
+    if suspended_msg:
+        log(f"[EXIT] update not available yet (post-継続): {suspended_msg}")
+        cap.snap(page, "suspended")
+        return (True, "not_yet_renewable", suspended_msg)
 
     # ---- CAPTCHA image ----
     cap.snap(page, "before_captcha")
+    # CAPTCHA 探索前にもう一度 suspended 判定 (念のため二重防御)
+    suspended_msg = _read_suspended_message(page)
+    if suspended_msg:
+        log(f"[EXIT] suspended detected before CAPTCHA: {suspended_msg}")
+        cap.snap(page, "suspended_before_captcha")
+        return (True, "not_yet_renewable", suspended_msg)
+
     code = _solve_captcha(page)
     if not code:
+        # CAPTCHA が見つからなかった場合、実は suspended ページに居るだけの可能性もある
+        suspended_msg = _read_suspended_message(page)
+        if suspended_msg:
+            log(f"[EXIT] no CAPTCHA because suspended: {suspended_msg}")
+            cap.snap(page, "suspended_no_captcha")
+            return (True, "not_yet_renewable", suspended_msg)
         if os.environ.get("CI"):
             log("[FAIL] CI: CAPTCHA unsolved")
             cap.snap(page, "captcha_failed")
-            return False
+            return (False, "captcha_failed", "CAPTCHA画像が取得できないか、解けませんでした。")
         code = input("CAPTCHA: ").strip()
 
     log("filling CAPTCHA")
@@ -771,15 +993,15 @@ def run_renewal(page, cap: FrameCapture) -> bool:
     if page.locator("text=認証に失敗しました").count() > 0:
         log("[FAIL] Cloudflare rejected — will retry on next schedule")
         cap.snap(page, "cf_failed")
-        return False
+        return (False, "cf_rejected", "Cloudflareの認証に失敗しました。次回スケジュールで再試行します。")
     if page.locator("text=入力された認証コードが正しくありません").count() > 0:
         log("[FAIL] CAPTCHA wrong — will retry on next schedule")
         cap.snap(page, "captcha_wrong")
-        return False
+        return (False, "captcha_wrong", "CAPTCHAの数値が一致しませんでした。次回スケジュールで再試行します。")
 
     log("renewal succeeded")
     print("更新操作を送信しました。ブラウザ上の結果を確認してください。")
-    return True
+    return (True, "renewed", "無料VPSの更新手続きを送信しました。")
 
 
 # ---------------------------------------------------------------------------
@@ -877,15 +1099,31 @@ def main() -> int:
         launch_kwargs["license_key"] = license_key
 
     succeeded = False
+    status_code = "exception"
+    detail = ""
     ctx = None
     try:
         ctx = launch_persistent_context(profile_dir, **launch_kwargs)
         ctx.set_default_timeout(60_000)
         ctx.set_default_navigation_timeout(60_000)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        succeeded = run_renewal(page, cap)
+        result = run_renewal(page, cap)
+        # 後方互換: tuple 以外 (bool 単体) が返っても壊れないようにする
+        if isinstance(result, tuple) and len(result) >= 3:
+            succeeded, status_code, detail = bool(result[0]), str(result[1]), str(result[2])
+        else:
+            succeeded = bool(result)
+            status_code = "renewed" if succeeded else "exception"
+            detail = ""
     except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
         log(f"[FAIL] unhandled exception: {e}")
+        # トレースの末尾数行だけ Discord embed に載せる
+        tb_tail = "\n".join(tb.rstrip().splitlines()[-6:])
+        succeeded = False
+        status_code = "exception"
+        detail = f"{type(e).__name__}: {e}\n{tb_tail}"
         try:
             if ctx and ctx.pages:
                 cap.snap(ctx.pages[0], "exception")
@@ -899,10 +1137,19 @@ def main() -> int:
             except Exception:
                 pass
 
+    rc = 0 if succeeded else 1
+
+    # ---- Discord 通知は必ず飛ばす (webhook 未設定なら内部で no-op) ----
+    try:
+        _notify_discord(rc, status_code, detail)
+    except Exception as e:
+        log(f"[discord] notify wrapper failed: {e}")
+
     if not succeeded:
-        log("[FAIL] flow did not succeed")
-        return 1
-    return 0
+        log(f"[FAIL] flow did not succeed (status={status_code})")
+        return rc
+    log(f"[OK] flow finished (status={status_code})")
+    return rc
 
 
 if __name__ == "__main__":

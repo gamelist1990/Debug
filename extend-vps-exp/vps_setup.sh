@@ -512,8 +512,16 @@ do_run() {
   set -e
   log "$(date -Is) main.py exited rc=$rc"
 
-  # Discord notification (no-op unless $Discord is set in .env / env).
-  notify_discord "$rc" || true
+  # Discord notification.
+  # main.py 側 (Python) が既に通知していれば .discord_notified_by_python が
+  # 置かれているので、その場合はスキップして二重投稿を防ぐ。
+  local py_marker="$APP_DIR/.discord_notified_by_python"
+  if [ -f "$py_marker" ]; then
+    log "Discord notify: main.py already notified — skipping bash notify"
+    rm -f "$py_marker" || true
+  else
+    notify_discord "$rc" || true
+  fi
 
   return $rc
 }
