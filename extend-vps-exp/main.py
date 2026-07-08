@@ -542,7 +542,7 @@ def _try_click_turnstile(page) -> bool:
         return False
 
 
-def _solve_turnstile(page, max_seconds: float = 30.0) -> bool:
+def _solve_turnstile(page, cap=None, max_seconds: float = 30.0) -> bool:
     """Turnstile を能動的に解く。
 
     手順:
@@ -551,8 +551,19 @@ def _solve_turnstile(page, max_seconds: float = 30.0) -> bool:
       3. クリック後さらに poll して token が生えるのを待つ。
 
     戻り値: True = token が見えた, False = タイムアウトまでに見えなかった
+
+    cap: FrameCapture (オプショナル)。渡されたら CF の途中経過を連連でスナップする。
     """
+    def _snap(label: str) -> None:
+        if cap is None:
+            return
+        try:
+            cap.snap(page, label)
+        except Exception as _e:
+            log(f"[cf][snap] failed at {label}: {_e}")
+
     deadline = time.time() + max_seconds
+    _snap("cf_phase1_start")
 
     # Phase 1: passive wait しながら token を poll
     log("[cf] phase1: passive wait for auto-solve (up to 8s)")
@@ -561,9 +572,11 @@ def _solve_turnstile(page, max_seconds: float = 30.0) -> bool:
         token = _read_turnstile_token(page)
         if token:
             log(f"[cf] token issued during passive wait (len={len(token)})")
+            _snap("cf_token_passive")
             return True
         time.sleep(0.5)
 
+    _snap("cf_phase1_end")
     # 現在の DOM 状態をデバッグログ
     _log_turnstile_dom_state(page)
 
@@ -578,6 +591,7 @@ def _solve_turnstile(page, max_seconds: float = 30.0) -> bool:
 
     if iframe_missing:
         log("[cf] iframe is missing — attempting recovery (likely invisible mode)")
+        _snap("cf_iframe_missing")
         # (1) api.js がないなら入れる
         _try_inject_turnstile_script(page)
         time.sleep(2.0)
@@ -585,9 +599,11 @@ def _solve_turnstile(page, max_seconds: float = 30.0) -> bool:
         widget_id = _try_force_render_turnstile(page)
         if widget_id is not None:
             log(f"[cf] force-render succeeded (widget id={widget_id!r})")
+            _snap("cf_after_render")
             # (3) invisible mode を想定して execute() を明示的に呼ぶ
             time.sleep(1.0)
             _try_execute_invisible_turnstile(page, widget_id)
+            _snap("cf_after_execute")
             # (4) 15s poll: callback / getResponse / input を全方位で探す
             wait_end = min(deadline, time.time() + 15.0)
             while time.time() < wait_end:
@@ -595,62 +611,76 @@ def _solve_turnstile(page, max_seconds: float = 30.0) -> bool:
                 if token:
                     log(f"[cf] token acquired after force-render+execute (len={len(token)})")
                     _propagate_cf_token(page, token)
+                    _snap("cf_token_render")
                     return True
                 # エラーが発生してたらログに出して抜ける
                 try:
                     err = page.evaluate("() => window.__cfError || ''")
                     if err:
                         log(f"[cf] error-callback fired: {err}")
+                        _snap("cf_error_callback")
                         break
                 except Exception:
                     pass
                 time.sleep(0.5)
         else:
             log("[cf] force-render failed, falling through to click attempts")
+            _snap("cf_render_failed")
         _log_turnstile_dom_state(page)
 
     # Phase 2: checkbox / widget クリック (最大 3 回リトライ)
     log("[cf] phase2: attempting widget click (with retries)")
+    _snap("cf_phase2_start")
     clicked_any = False
     for attempt in range(3):
         if time.time() >= deadline:
             break
+        _snap(f"cf_click_{attempt + 1}_before")
         clicked = _try_click_turnstile(page)
         if clicked:
             clicked_any = True
             log(f"[cf] click attempt {attempt + 1} succeeded, polling for token")
+            _snap(f"cf_click_{attempt + 1}_after")
             # Phase 3: click 後の polling (最大 8s)
             wait_end = min(deadline, time.time() + 8.0)
             while time.time() < wait_end:
                 token = _read_turnstile_token(page)
                 if token:
                     log(f"[cf] token issued after click (len={len(token)})")
+                    _snap(f"cf_token_click_{attempt + 1}")
                     return True
                 time.sleep(0.5)
             log(f"[cf] click attempt {attempt + 1}: no token yet, will retry")
+            _snap(f"cf_click_{attempt + 1}_no_token")
         else:
             # まだ widget が見えない → 2s 待って再探索
             log(f"[cf] click attempt {attempt + 1}: no widget visible, waiting 2s")
+            _snap(f"cf_click_{attempt + 1}_no_widget")
             time.sleep(2.0)
             token = _read_turnstile_token(page)
             if token:
                 log(f"[cf] token issued during retry wait (len={len(token)})")
+                _snap(f"cf_token_retry_{attempt + 1}")
                 return True
 
     if not clicked_any:
         log("[cf] no widget ever became clickable")
+        _snap("cf_no_widget")
         _log_turnstile_dom_state(page)
 
     # Phase 4: 最後のパッシブ待機
     log("[cf] phase4: final passive wait until deadline")
+    _snap("cf_phase4_start")
     while time.time() < deadline:
         token = _read_turnstile_token(page)
         if token:
             log(f"[cf] token issued in final wait (len={len(token)})")
+            _snap("cf_token_final")
             return True
         time.sleep(0.5)
 
     log("[cf] token not observed within deadline")
+    _snap("cf_timeout")
     _log_turnstile_dom_state(page)
     return False
 
@@ -856,7 +886,7 @@ def run_renewal(page, cap: FrameCapture) -> bool:
     # token を poll しつつ、必要なら iframe を人間っぽくクリックする。
     log("solving Cloudflare Turnstile…")
     cap.snap(page, "cf_waiting")
-    cf_ok = _solve_turnstile(page, max_seconds=30.0)
+    cf_ok = _solve_turnstile(page, cap, max_seconds=30.0)
     cap.snap(page, "cf_done")
     if not cf_ok:
         log("[warn] Turnstile token not observed — submitting anyway")
