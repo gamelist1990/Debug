@@ -870,9 +870,11 @@ def run_renewal(page, cap: FrameCapture) -> bool:
 
     submit = page.get_by_role("button", name="無料VPSの利用を継続する").first
 
+    # ※ btn--loading は xserver の全ボタンに常時付いている装飾クラスで、
+    #   「loading 中」を意味しない。disabled 属性だけ見る。
     log("waiting for submit button to become truly enabled…")
     submit_ready = False
-    poll_deadline = time.time() + 20.0
+    poll_deadline = time.time() + 15.0
     while time.time() < poll_deadline:
         try:
             state = page.evaluate(
@@ -881,13 +883,11 @@ def run_renewal(page, cap: FrameCapture) -> bool:
                 "  const target = btns.find(b => (b.textContent || '').includes('無料VPSの利用を継続する'));"
                 "  if (!target) return {found: false};"
                 "  const disabled = target.hasAttribute('disabled') || target.getAttribute('aria-disabled') === 'true';"
-                "  const cls = target.className || '';"
-                "  const loading = /is-loading|isLoading|running|loading/i.test(cls);"
                 "  const rect = target.getBoundingClientRect();"
-                "  return {found: true, disabled, loading, cls, w: rect.width, h: rect.height};"
+                "  return {found: true, disabled, cls: target.className||'', tag: target.tagName, w: rect.width, h: rect.height};"
                 "}"
             ) or {}
-            if state.get("found") and not state.get("disabled") and not state.get("loading"):
+            if state.get("found") and not state.get("disabled"):
                 log(f"[submit] button ready (state={state})")
                 submit_ready = True
                 break
@@ -897,18 +897,84 @@ def run_renewal(page, cap: FrameCapture) -> bool:
         time.sleep(0.5)
 
     if not submit_ready:
-        log("[submit] button never became enabled; will try click anyway")
+        log("[submit] button still disabled — attempting forced enable + callback trigger")
+        try:
+            forced = page.evaluate(
+                "() => {"
+                "  const result = {steps: []};"
+                "  const btns = Array.from(document.querySelectorAll('button, a.btn'));"
+                "  const target = btns.find(b => (b.textContent || '').includes('無料VPSの利用を継続する'));"
+                "  if (!target) return {ok:false, reason:'no_target'};"
+                "  /* (1) widget の data-callback を探して呼んでみる */"
+                "  const widget = document.querySelector('.cf-turnstile');"
+                "  const cbName = widget ? widget.getAttribute('data-callback') : null;"
+                "  result.callbackName = cbName;"
+                "  const token = window.__cfToken || '';"
+                "  if (cbName && typeof window[cbName] === 'function' && token) {"
+                "    try { window[cbName](token); result.steps.push('called_callback'); } catch (e) { result.callbackError = String(e); }"
+                "  }"
+                "  /* (2) disabled を強制的に外す */"
+                "  target.removeAttribute('disabled');"
+                "  target.removeAttribute('aria-disabled');"
+                "  result.steps.push('removed_disabled');"
+                "  /* (3) form があれば 直接 submit する選択肢もログに残す */"
+                "  const form = target.closest('form');"
+                "  result.hasForm = !!form;"
+                "  return {ok:true, ...result};"
+                "}"
+            ) or {}
+            log(f"[submit] forced enable result: {forced}")
+        except Exception as e:
+            log(f"[submit] forced enable failed: {e}")
 
-    # ページのスピナーが他にも回ってないかの確認 (丘のため)
-    try:
-        page.wait_for_load_state("networkidle", timeout=5_000)
-    except Exception:
-        pass
+        # (4) 強制 enable にした後、もう一度 disabled が外れたか確認
+        time.sleep(1.5)
+        try:
+            recheck = page.evaluate(
+                "() => {"
+                "  const btns = Array.from(document.querySelectorAll('button, a.btn'));"
+                "  const target = btns.find(b => (b.textContent || '').includes('無料VPSの利用を継続する'));"
+                "  if (!target) return {found:false};"
+                "  return {found:true, disabled: target.hasAttribute('disabled') || target.getAttribute('aria-disabled') === 'true'};"
+                "}"
+            ) or {}
+            log(f"[submit] after force: {recheck}")
+            if recheck.get("found") and not recheck.get("disabled"):
+                submit_ready = True
+        except Exception:
+            pass
 
     # 少しランダムな pre-click delay
-    time.sleep(1.2 + random.random() * 1.5)
+    time.sleep(0.8 + random.random() * 1.2)
     log("submitting")
-    _wait_and_click(submit, timeout_ms=30_000)
+
+    click_ok = False
+    try:
+        _wait_and_click(submit, timeout_ms=15_000)
+        click_ok = True
+    except Exception as e:
+        log(f"[submit] normal click failed: {e}")
+
+    if not click_ok:
+        # フォールバック: JS で click() / form.submit()
+        log("[submit] fallback: JS click() then form.submit()")
+        try:
+            js_result = page.evaluate(
+                "() => {"
+                "  const btns = Array.from(document.querySelectorAll('button, a.btn'));"
+                "  const target = btns.find(b => (b.textContent || '').includes('無料VPSの利用を継続する'));"
+                "  if (!target) return {ok:false, reason:'no_target'};"
+                "  target.removeAttribute('disabled');"
+                "  try { target.click(); return {ok:true, via:'click'}; } catch (e) { }"
+                "  const form = target.closest('form');"
+                "  if (form) { form.submit(); return {ok:true, via:'form.submit'}; }"
+                "  return {ok:false, reason:'no_form'};"
+                "}"
+            )
+            log(f"[submit] JS fallback result: {js_result}")
+        except Exception as e:
+            log(f"[submit] JS fallback exception: {e}")
+
     cap.snap(page, "submitted")
 
     # Wait for the server response page.
