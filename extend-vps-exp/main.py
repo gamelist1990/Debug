@@ -52,6 +52,91 @@ log = logging.getLogger("xserver-renew").info
 
 
 # ---------------------------------------------------------------------------
+# 「まだ更新不要」時の次回スキップ管理
+# ---------------------------------------------------------------------------
+# .newApp__suspended に「YYYY年M月D日以降にお試しください」と書かれている
+# 場合、その日付までは何度実行しても結果は同じ (=更新不可)。無駄な通信、
+# ログイン試行、Cloudflare 通過試行、Discord 再通知を減らすため、その日付を
+# state ファイルに保存しておき、翌回以降の cron 実行は日付を過ぎるまで即
+# return 0 でスキップする。強制的に走らせたいときは環境変数 FORCE_RUN=1 を
+# 付けて実行すればスキップ判定は無視される。
+SKIP_STATE_PATH = Path(BASE_DIR) / "skip_until.txt"
+
+# 例: "2026年7月12日以降にお試しください"
+_NEXT_RENEWABLE_DATE_RE = re.compile(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+
+
+def _today_jst():
+    """Return today's date in JST (the target service is JP-only)."""
+    try:
+        from zoneinfo import ZoneInfo  # Python 3.9+
+        return datetime.now(ZoneInfo("Asia/Tokyo")).date()
+    except Exception:
+        # Fallback: naive local date. Fine if host clock is close to JST.
+        return datetime.now().date()
+
+
+def _parse_next_renewable_date(text: str):
+    """Extract "YYYY年M月D日" from a suspended-banner message.
+
+    Returns a ``datetime.date`` or ``None`` if no date is found / invalid.
+    """
+    if not text:
+        return None
+    m = _NEXT_RENEWABLE_DATE_RE.search(text)
+    if not m:
+        return None
+    try:
+        from datetime import date
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except Exception:
+        return None
+
+
+def _save_skip_until(next_date) -> None:
+    """Persist "skip runs until this date" so future cron ticks exit early."""
+    if next_date is None:
+        return
+    try:
+        SKIP_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SKIP_STATE_PATH.write_text(next_date.isoformat() + "\n", encoding="utf-8")
+        log(f"[skip] next attempt allowed on {next_date.isoformat()} (state saved)")
+    except Exception as e:
+        log(f"[skip] failed to save state: {e}")
+
+
+def _load_skip_until():
+    """Read the previously-saved skip-until date, or None if unset/invalid."""
+    try:
+        if not SKIP_STATE_PATH.is_file():
+            return None
+        raw = SKIP_STATE_PATH.read_text(encoding="utf-8").strip()
+        if not raw:
+            return None
+        from datetime import date
+        y, mo, d = raw.split("-")
+        return date(int(y), int(mo), int(d))
+    except Exception as e:
+        log(f"[skip] failed to read state: {e}")
+        return None
+
+
+def _clear_skip_until() -> None:
+    """Drop the state file (e.g. after a successful renewal)."""
+    try:
+        if SKIP_STATE_PATH.is_file():
+            SKIP_STATE_PATH.unlink()
+            log("[skip] state cleared")
+    except Exception as e:
+        log(f"[skip] failed to clear state: {e}")
+
+
+def _force_run_requested() -> bool:
+    """True if user set FORCE_RUN=1 to bypass the skip-until gate."""
+    return os.environ.get("FORCE_RUN", "").lower() in {"1", "true", "yes", "on"}
+
+
+# ---------------------------------------------------------------------------
 # PROXY_SERVER 正規化
 # ---------------------------------------------------------------------------
 # 住宅プロキシで良く見る「host:port:user:pass」形式を、
@@ -523,15 +608,80 @@ def _read_suspended_message(page) -> str:
 #
 # status_code -> 色 / 絵文字 / タイトル のマッピング
 _DISCORD_STATUS_META = {
-    "renewed":           {"color": 3066993,  "emoji": "\u2705", "title": "更新完了"},
-    "not_yet_renewable": {"color": 3447003,  "emoji": "\u23f3", "title": "まだ更新不要"},
-    "already_renewed":   {"color": 3447003,  "emoji": "\u2139\ufe0f", "title": "更新対象外"},
-    "not_contracted":    {"color": 9807270,  "emoji": "\u26aa", "title": "未契約サービス"},
-    "captcha_failed":    {"color": 15158332, "emoji": "\u274c", "title": "CAPTCHA解決失敗"},
-    "captcha_wrong":     {"color": 15158332, "emoji": "\u274c", "title": "CAPTCHA不一致"},
-    "cf_rejected":       {"color": 15158332, "emoji": "\u274c", "title": "Cloudflare拒否"},
-    "exception":         {"color": 15158332, "emoji": "\U0001f4a5", "title": "予期せぬエラー"},
+    "renewed": {
+        "color": 3066993,
+        "emoji": "\u2705",
+        "title": "更新完了",
+        "summary": "無料VPSの更新手続きを正常に送信しました。次回の期限までそのままご利用いただけます。",
+    },
+    "not_yet_renewable": {
+        "color": 3447003,
+        "emoji": "\u23f3",
+        "title": "まだ更新期間ではありません",
+        "summary": "現在は更新できる期間外です。指定日以降に自動で再試行します。",
+    },
+    "already_renewed": {
+        "color": 3447003,
+        "emoji": "\u2139\ufe0f",
+        "title": "更新対象外",
+        "summary": "既に更新済みか、更新ボタンが表示されていませんでした。今回は何もしていません。",
+    },
+    "not_contracted": {
+        "color": 9807270,
+        "emoji": "\u26aa",
+        "title": "未契約サービス",
+        "summary": "このアカウントには無料VPSの契約がありません。",
+    },
+    "captcha_failed": {
+        "color": 15158332,
+        "emoji": "\u274c",
+        "title": "CAPTCHAを解けませんでした",
+        "summary": "画像認証の取得または解析に失敗しました。次回のスケジュール実行で自動的に再試行します。",
+    },
+    "captcha_wrong": {
+        "color": 15158332,
+        "emoji": "\u274c",
+        "title": "CAPTCHAが不一致でした",
+        "summary": "入力したCAPTCHAが受け付けられませんでした。次回のスケジュール実行で自動的に再試行します。",
+    },
+    "cf_rejected": {
+        "color": 15158332,
+        "emoji": "\u274c",
+        "title": "Cloudflareに拒否されました",
+        "summary": "Cloudflare Turnstileの認証を通過できませんでした。次回のスケジュール実行で自動的に再試行します。",
+    },
+    "exception": {
+        "color": 15158332,
+        "emoji": "\U0001f4a5",
+        "title": "予期せぬエラー",
+        "summary": "スクリプトの実行中に例外が発生しました。下記のエラー内容を確認してください。",
+    },
 }
+
+
+def _format_jst_now() -> str:
+    """Format current time in JST as 'YYYY-MM-DD HH:MM (JST)'."""
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Tokyo"))
+    except Exception:
+        now = datetime.now()
+    return now.strftime("%Y-%m-%d %H:%M (JST)")
+
+
+def _format_next_date_jp(d) -> str:
+    """Format a date object as '2026年7月12日 (日)'."""
+    if d is None:
+        return ""
+    weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+    try:
+        wd = weekdays[d.weekday()]
+        return f"{d.year}年{d.month}月{d.day}日 ({wd})"
+    except Exception:
+        try:
+            return d.isoformat()
+        except Exception:
+            return str(d)
 
 
 def _discord_msg_id_paths() -> list:
@@ -562,20 +712,79 @@ def _notify_discord(rc: int, status_code: str, detail: str) -> None:
     except Exception:
         host_name = os.environ.get("COMPUTERNAME") or "unknown"
 
+    # ---- 見やすい embed を組み立てる ----
+    # 従来: 「Status: not_yet_renewable / Exit Code: 0 / Detail: ...」だと
+    # 何が起きたのか一目で分からなかったので、
+    #   * タイトル = 絵文字 + 日本語ステータス
+    #   * 説明文  = 今回何が起きたかの 1 文サマリー
+    #   * fields  = 「次回試行可能日 / 発生時刻 / 実行ホスト」等
+    # に構造化する。デバッグ用の raw status_code は footer に隠す。
+    description_lines = [f"{meta['emoji']} **{meta['title']}**"]
+    if meta.get("summary"):
+        description_lines.append(meta["summary"])
+
     embed = {
-        "title": f"VPS Auto Update \u2014 {meta['title']}",
+        "title": "VPS 自動更新レポート",
         "color": meta["color"],
-        "fields": [
-            {"name": "Status", "value": f"{meta['emoji']} {status_code}", "inline": True},
-            {"name": "Exit Code", "value": str(rc), "inline": True},
-            {"name": "Host", "value": host_name, "inline": True},
-        ],
-        "footer": {"text": "VPS Auto Update (main.py)"},
+        "description": "\n".join(description_lines),
+        "fields": [],
+        "footer": {"text": f"VPS Auto Update  \u2022  status={status_code}  \u2022  rc={rc}"},
         "timestamp": ts,
     }
+
+    # 「まだ更新不要」のときは detail に含まれる日付を目立たせて再掲する。
+    next_attempt_field = ""
+    if status_code == "not_yet_renewable":
+        next_date = _parse_next_renewable_date(detail)
+        if next_date is not None:
+            next_attempt_field = _format_next_date_jp(next_date) + " 以降"
+    if next_attempt_field:
+        embed["fields"].append({
+            "name": "\U0001f4c5 次回試行可能日",
+            "value": next_attempt_field,
+            "inline": False,
+        })
+
+    # 実行メタ情報 (時刻 / ホスト) は 2 列で並べる。
+    embed["fields"].append({
+        "name": "\U0001f552 実行時刻",
+        "value": _format_jst_now(),
+        "inline": True,
+    })
+    embed["fields"].append({
+        "name": "\U0001f5a5\ufe0f 実行ホスト",
+        "value": host_name,
+        "inline": True,
+    })
+
+    # detail が付いているケース:
+    #   * exception -> トレース。code block で囲うと読みやすい。
+    #   * not_yet_renewable -> サイト側の原文。そのまま引用ブロックで見せる。
+    #   * その他 (already_renewed / captcha_failed 等) -> 引用ブロック。
     if detail:
-        # embed field は 1024 文字上限
-        embed["fields"].append({"name": "Detail", "value": detail[:1000], "inline": False})
+        clean_detail = detail.strip()
+        if status_code == "exception":
+            # code block は ``` の 3 文字 x2 と改行 = 8 文字ぶん引く
+            body = clean_detail[:1000]
+            embed["fields"].append({
+                "name": "\U0001f4a5 エラー内容",
+                "value": f"```\n{body}\n```",
+                "inline": False,
+            })
+        else:
+            # サイト原文をそのまま貼るときはブロック引用 "> " で整形する。
+            body = clean_detail[:1000]
+            quoted = "\n".join("> " + ln if ln else ">" for ln in body.splitlines())
+            field_name = (
+                "\U0001f4dd サイトからのメッセージ"
+                if status_code == "not_yet_renewable"
+                else "\U0001f4dd 詳細"
+            )
+            embed["fields"].append({
+                "name": field_name,
+                "value": quoted,
+                "inline": False,
+            })
 
     payload = {"username": "VPS Auto Update", "embeds": [embed]}
     payload_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -1012,6 +1221,19 @@ def main() -> int:
     headless = _is_headless()
     log(f"runtime: headless={headless}, ci={is_ci}")
 
+    # ---- Skip-until short-circuit ----
+    # 前回の実行で「まだ更新不要 (YYYY年M月D日以降)」を受け取っていたら、
+    # その日付まで実際のログイン試行はスキップして即 return 0 で終わる。
+    # FORCE_RUN=1 を付ければ無視する。
+    skip_until = _load_skip_until()
+    if skip_until is not None and not _force_run_requested():
+        today = _today_jst()
+        if today < skip_until:
+            log(f"[skip] today={today.isoformat()} < skip_until={skip_until.isoformat()} -> skipping run")
+            log("[skip] to force a run anyway, re-invoke with FORCE_RUN=1")
+            return 0
+        log(f"[skip] today={today.isoformat()} >= skip_until={skip_until.isoformat()} -> proceeding")
+
     try:
         from cloakbrowser import launch_persistent_context
     except ImportError as e:
@@ -1138,6 +1360,21 @@ def main() -> int:
                 pass
 
     rc = 0 if succeeded else 1
+
+    # ---- Skip-until 状態の更新 ----
+    # not_yet_renewable の detail 内にある「YYYY年M月D日以降」を state に保存し、
+    # 更新完了 / 更新対象外 / 未契約になった場合は state を消す。
+    try:
+        if status_code == "not_yet_renewable":
+            next_date = _parse_next_renewable_date(detail)
+            if next_date is not None:
+                _save_skip_until(next_date)
+            else:
+                log("[skip] not_yet_renewable but no date parsed from detail; state left as-is")
+        elif status_code in {"renewed", "already_renewed", "not_contracted"}:
+            _clear_skip_until()
+    except Exception as _se:
+        log(f"[skip] state update failed: {_se}")
 
     # ---- Discord 通知は必ず飛ばす (webhook 未設定なら内部で no-op) ----
     try:
