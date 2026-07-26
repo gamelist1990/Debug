@@ -616,49 +616,71 @@ _DISCORD_STATUS_META = {
         "color": 3066993,
         "emoji": "\u2705",
         "title": "更新完了",
-        "summary": "無料VPSの更新手続きを正常に送信しました。次回の期限までそのままご利用いただけます。",
+        "summary": "無料VPSの更新手続きが正常に完了しました。",
+        "action": "対応は不要です。次回も毎日13:00（JST）に自動確認します。",
     },
     "not_yet_renewable": {
         "color": 3447003,
         "emoji": "\u23f3",
         "title": "更新可能時刻を待機中",
         "summary": "現在は更新受付時間外です。毎日13:00（JST）の定期確認で、更新可能になり次第自動更新します。",
+        "action": "対応は不要です。サイト指定の更新可能日以降に自動で再試行します。",
     },
     "already_renewed": {
         "color": 3447003,
         "emoji": "\u2139\ufe0f",
-        "title": "更新対象外",
-        "summary": "既に更新済みか、更新ボタンが表示されていませんでした。今回は何もしていません。",
+        "title": "更新処理は不要でした",
+        "summary": "既に更新済み、または現在は更新対象ではないため、変更せずに終了しました。",
+        "action": "通常は対応不要です。同じ状態が続く場合のみXServerの契約画面を確認してください。",
     },
     "not_contracted": {
         "color": 9807270,
         "emoji": "\u26aa",
         "title": "未契約サービス",
         "summary": "このアカウントには無料VPSの契約がありません。",
+        "action": "監視対象アカウントが正しいか、EMAILの設定を確認してください。",
     },
     "captcha_failed": {
         "color": 15158332,
         "emoji": "\u274c",
-        "title": "CAPTCHAを解けませんでした",
+        "title": "画像認証の解析に失敗",
         "summary": "画像認証の取得または解析に失敗しました。次回のスケジュール実行で自動的に再試行します。",
+        "action": "次回は自動再試行します。連続して失敗する場合はcron.logとframesを確認してください。",
     },
     "captcha_wrong": {
         "color": 15158332,
         "emoji": "\u274c",
-        "title": "CAPTCHAが不一致でした",
+        "title": "画像認証コードが不一致",
         "summary": "入力したCAPTCHAが受け付けられませんでした。次回のスケジュール実行で自動的に再試行します。",
+        "action": "次回は自動再試行します。連続して失敗する場合はCAPTCHAモデルを確認してください。",
     },
     "cf_rejected": {
         "color": 15158332,
         "emoji": "\u274c",
-        "title": "Cloudflareに拒否されました",
+        "title": "ブラウザー認証に失敗",
         "summary": "Cloudflare Turnstileの認証を通過できませんでした。次回のスケジュール実行で自動的に再試行します。",
+        "action": "次回は自動再試行します。連続して失敗する場合はネットワークとブラウザー環境を確認してください。",
+    },
+    "dependency_error": {
+        "color": 15105570,
+        "emoji": "\u26a0\ufe0f",
+        "title": "実行環境の準備不足",
+        "summary": "必要なPythonパッケージを読み込めなかったため、更新確認を開始できませんでした。",
+        "action": "vps_setup.sh --installを再実行し、依存パッケージを更新してください。",
+    },
+    "proxy_error": {
+        "color": 15105570,
+        "emoji": "\u26a0\ufe0f",
+        "title": "ネットワーク接続エラー",
+        "summary": "設定されたプロキシの事前接続確認に失敗したため、処理を中止しました。",
+        "action": "PROXY_SERVER、トンネル、および接続元PCの稼働状態を確認してください。",
     },
     "exception": {
         "color": 15158332,
         "emoji": "\U0001f4a5",
         "title": "予期せぬエラー",
         "summary": "スクリプトの実行中に例外が発生しました。下記のエラー内容を確認してください。",
+        "action": "エラー内容、cron.log、最新のframesを確認してください。",
     },
 }
 
@@ -723,18 +745,25 @@ def _notify_discord(rc: int, status_code: str, detail: str) -> None:
     #   * 説明文  = 今回何が起きたかの 1 文サマリー
     #   * fields  = 「次回試行可能日 / 発生時刻 / 実行ホスト」等
     # に構造化する。デバッグ用の raw status_code は footer に隠す。
-    description_lines = [f"{meta['emoji']} **{meta['title']}**"]
+    description_lines = [f"## {meta['emoji']} {meta['title']}"]
     if meta.get("summary"):
         description_lines.append(meta["summary"])
 
     embed = {
-        "title": "VPS 自動更新レポート",
+        "author": {"name": "XServer 無料VPS 自動更新モニター"},
+        "title": meta["title"],
         "color": meta["color"],
         "description": "\n".join(description_lines),
         "fields": [],
-        "footer": {"text": f"VPS Auto Update  \u2022  status={status_code}  \u2022  rc={rc}"},
+        "footer": {"text": f"XServer Free VPS Monitor  \u2022  {status_code}  \u2022  exit {rc}"},
         "timestamp": ts,
     }
+
+    embed["fields"].append({
+        "name": "\U0001f6e0\ufe0f 対応",
+        "value": meta.get("action") or "詳細を確認してください。",
+        "inline": False,
+    })
 
     # 「まだ更新不要」のときは detail に含まれる日付を目立たせて再掲する。
     next_attempt_field = ""
@@ -762,7 +791,12 @@ def _notify_discord(rc: int, status_code: str, detail: str) -> None:
     })
     embed["fields"].append({
         "name": "\U0001f5a5\ufe0f 実行ホスト",
-        "value": host_name,
+        "value": f"`{host_name}`",
+        "inline": True,
+    })
+    embed["fields"].append({
+        "name": "\U0001f522 終了コード",
+        "value": f"`{rc}`",
         "inline": True,
     })
 
@@ -784,11 +818,17 @@ def _notify_discord(rc: int, status_code: str, detail: str) -> None:
             # サイト原文をそのまま貼るときはブロック引用 "> " で整形する。
             body = clean_detail[:1000]
             quoted = "\n".join("> " + ln if ln else ">" for ln in body.splitlines())
-            field_name = (
-                "\U0001f4dd サイトからのメッセージ"
-                if status_code == "not_yet_renewable"
-                else "\U0001f4dd 詳細"
-            )
+            field_name = {
+                "not_yet_renewable": "\U0001f4dd XServerからのお知らせ",
+                "renewed": "\U0001f4dd 更新結果",
+                "already_renewed": "\U0001f4dd 判定内容",
+                "not_contracted": "\U0001f4dd 契約確認結果",
+                "captcha_failed": "\U0001f50d 失敗内容",
+                "captcha_wrong": "\U0001f50d 失敗内容",
+                "cf_rejected": "\U0001f50d 失敗内容",
+                "dependency_error": "\U0001f50d 環境エラー",
+                "proxy_error": "\U0001f50d 接続エラー",
+            }.get(status_code, "\U0001f4dd 詳細")
             embed["fields"].append({
                 "name": field_name,
                 "value": quoted,
@@ -1241,6 +1281,14 @@ def main() -> int:
         if today < skip_until:
             log(f"[skip] today={today.isoformat()} < skip_until={skip_until.isoformat()} -> skipping run")
             log("[skip] to force a run anyway, re-invoke with FORCE_RUN=1")
+            detail = (
+                f"サイトで確認した更新可能日まで待機しています。\n"
+                f"次回更新可能日: {_format_next_date_jp(skip_until)} 以降"
+            )
+            try:
+                _notify_discord(0, "not_yet_renewable", detail)
+            except Exception as e:
+                log(f"[discord] skip notification failed: {e}")
             return 0
         log(f"[skip] today={today.isoformat()} >= skip_until={skip_until.isoformat()} -> proceeding")
 
@@ -1249,6 +1297,10 @@ def main() -> int:
     except ImportError as e:
         log(f"[FATAL] cloakbrowser not installed: {e}")
         log("        Install with: pip install cloakbrowser cloakbrowser[geoip]")
+        try:
+            _notify_discord(2, "dependency_error", f"cloakbrowserを読み込めませんでした: {e}")
+        except Exception as notify_error:
+            log(f"[discord] dependency error notification failed: {notify_error}")
         return 2
 
     profile_dir = os.path.join(BASE_DIR, "chromium-profile")
@@ -1319,9 +1371,17 @@ def main() -> int:
             else:
                 log(f"[proxy] preflight FAILED rc={r.returncode} stderr={r.stderr[:200]!r}")
                 log("[proxy] --> \u5bb6PC \u5074\u3067 start.ps1 / tunnel.ps1 \u304c\u8d77\u52d5\u3057\u3066\u3044\u308b\u304b\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044")
+                try:
+                    _notify_discord(3, "proxy_error", f"プロキシ事前確認に失敗しました（curl exit={r.returncode}）。")
+                except Exception as notify_error:
+                    log(f"[discord] proxy error notification failed: {notify_error}")
                 return 3
         except Exception as _pe:
             log(f"[proxy] preflight exception: {_pe}")
+            try:
+                _notify_discord(3, "proxy_error", f"プロキシ事前確認中に例外が発生しました: {_pe}")
+            except Exception as notify_error:
+                log(f"[discord] proxy exception notification failed: {notify_error}")
             return 3
     else:
         log("[proxy] PROXY_SERVER not set -> \u76f4\u63a5 VPS \u306e IP \u3067\u5916\u306b\u51fa\u307e\u3059 (Cloudflare \u306b\u5f3e\u304b\u308c\u3084\u3059\u3044)")

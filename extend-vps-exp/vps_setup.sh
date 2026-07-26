@@ -232,13 +232,15 @@ notify_discord() {
   [ -z "$url" ] && return 0
   have curl || { warn "Discord notify skipped: curl missing"; return 0; }
 
-  local status_text color emoji
+  local status_text status_summary color emoji
   if [ "$rc" = "0" ]; then
-    status_text="Success"
+    status_text="正常終了"
+    status_summary="定期確認が正常に完了しました。"
     emoji="✅"
     color=3066993   # green
   else
-    status_text="Failed"
+    status_text="実行エラー"
+    status_summary="定期確認中にエラーが発生しました。cron.logを確認してください。"
     emoji="❌"
     color=15158332  # red
   fi
@@ -255,16 +257,17 @@ notify_discord() {
   local payload
   payload=$(cat <<JSON
 {
-  "username": "VPS Auto Update",
+  "username": "VPS更新モニター",
   "embeds": [{
-    "title": "VPS Auto Update",
+    "title": "${emoji} VPS 自動更新レポート",
+    "description": "**${status_text}**\n${status_summary}",
     "color": ${color},
     "fields": [
-      {"name": "Status", "value": "${emoji} ${status_text}", "inline": true},
-      {"name": "Exit Code", "value": "${rc_esc}", "inline": true},
-      {"name": "Host", "value": "${host_esc}", "inline": true}
+      {"name": "🕐 実行スケジュール", "value": "毎日 13:00 (JST)", "inline": true},
+      {"name": "🖥️ 実行ホスト", "value": "${host_esc}", "inline": true},
+      {"name": "🔢 終了コード", "value": "${rc_esc}", "inline": true}
     ],
-    "footer": {"text": "VPS Auto Update"},
+    "footer": {"text": "XServer Free VPS Auto Update • Shell fallback notification"},
     "timestamp": "${ts}"
   }]
 }
