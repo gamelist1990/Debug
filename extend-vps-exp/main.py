@@ -62,8 +62,11 @@ log = logging.getLogger("xserver-renew").info
 # 付けて実行すればスキップ判定は無視される。
 SKIP_STATE_PATH = Path(BASE_DIR) / "skip_until.txt"
 
-# 例: "2026年7月12日以降にお試しください"
-_NEXT_RENEWABLE_DATE_RE = re.compile(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+# 例: "2026年7月27日 12:00以降にお試しください"
+_NEXT_RENEWABLE_DATE_RE = re.compile(
+    r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日"
+    r"(?:\s*(\d{1,2})\s*:\s*(\d{2}))?"
+)
 
 
 def _today_jst():
@@ -583,12 +586,13 @@ def _solve_turnstile(page, cap=None, max_seconds: float = 30.0) -> bool:
 def _read_suspended_message(page) -> str:
     """Return the suspended-banner text if present, else empty string.
 
-    XVPS の無料 VPS 更新フローでは、利用期限の 1 日前になるまで更新できず
-    ``<section class="newApp__suspended">`` が表示される。これは正常系
-    (更新不要) なので True を返して抜けたい。
+    XVPS の無料 VPS 更新フローでは、更新可能時刻になるまで
+    ``.newApp__suspended`` または ``.freeVpsMessage`` が表示される。
+    後者は「利用期限の12時間前から更新手続きが可能です」の新しい画面で
+    使用される。どちらも正常系（更新待ち）として扱う。
     """
     try:
-        loc = page.locator(".newApp__suspended")
+        loc = page.locator(".newApp__suspended, .freeVpsMessage")
         if loc.count() == 0:
             return ""
         txt = loc.first.inner_text(timeout=1_500) or ""
@@ -617,8 +621,8 @@ _DISCORD_STATUS_META = {
     "not_yet_renewable": {
         "color": 3447003,
         "emoji": "\u23f3",
-        "title": "まだ更新期間ではありません",
-        "summary": "現在は更新できる期間外です。指定日以降に自動で再試行します。",
+        "title": "更新可能時刻を待機中",
+        "summary": "現在は更新受付時間外です。毎日13:00（JST）の定期確認で、更新可能になり次第自動更新します。",
     },
     "already_renewed": {
         "color": 3447003,
@@ -740,10 +744,15 @@ def _notify_discord(rc: int, status_code: str, detail: str) -> None:
             next_attempt_field = _format_next_date_jp(next_date) + " 以降"
     if next_attempt_field:
         embed["fields"].append({
-            "name": "\U0001f4c5 次回試行可能日",
+            "name": "\U0001f4c5 サイト指定の更新可能日時",
             "value": next_attempt_field,
             "inline": False,
         })
+    embed["fields"].append({
+        "name": "\U0001f504 定期実行",
+        "value": "毎日 13:00 (JST)",
+        "inline": True,
+    })
 
     # 実行メタ情報 (時刻 / ホスト) は 2 列で並べる。
     embed["fields"].append({
@@ -1046,7 +1055,8 @@ def run_renewal(page, cap: FrameCapture) -> tuple:
                 "『更新する』ボタンが見当たりません。既に更新済みか、更新対象外の可能性があります。")
 
     # 「更新する」直後に遷移するページで、まだ更新期間に入っていない場合は
-    # .newApp__suspended バナーが出る (例: "利用期限の1日前から更新手続きが可能")。
+    # .newApp__suspended または .freeVpsMessage が出る
+    # (例: "利用期限の12時間前から更新手続きが可能です")。
     # ここで検出できれば正常系 (更新不要) として扱う。
     try:
         page.wait_for_load_state("domcontentloaded", timeout=10_000)

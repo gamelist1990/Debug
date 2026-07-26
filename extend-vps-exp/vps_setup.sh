@@ -28,7 +28,8 @@ REPO_URL="${REPO_URL:-https://github.com/gamelist1990/Debug.git}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/xserver-auto-renew}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 TF_VERSION="${TF_VERSION:-2.19.0}"
-CRON_TIME="${CRON_TIME:-0 3 * * *}"
+# 毎日13:00 JSTに確認する。CRON_TIMEで任意の時刻へ上書き可能。
+CRON_TIME="${CRON_TIME:-0 13 * * *}"
 
 SCRIPT_ABS_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 
@@ -531,7 +532,7 @@ do_run() {
 # ------------------------------------------------------------------
 do_cron() {
   local marker="# xserver-auto-renew (managed by vps_setup.sh)"
-  local line="${CRON_TIME} bash ${SCRIPT_ABS_PATH} --run >> ${INSTALL_DIR}/cron.log 2>&1  ${marker}"
+  local line="CRON_TZ=Asia/Tokyo ${CRON_TIME} bash ${SCRIPT_ABS_PATH} --run >> ${INSTALL_DIR}/cron.log 2>&1  ${marker}"
 
   local current
   current=$(crontab -l 2>/dev/null || true)
@@ -594,14 +595,14 @@ Without arguments: install (if needed) then run.
 
   --install   Install/update dependencies only, do not run.
   --run       Run main.py (installs first if never installed).
-  --cron      Register a daily cron job (see CRON_TIME env var).
+  --cron      Register/update the daily 13:00 JST cron job.
   --uncron    Remove the managed cron job and Discord message cache.
   --help      Show this help.
 
 Env overrides:
   INSTALL_DIR   (default: \$HOME/xserver-auto-renew)
   REPO_URL      (default: https://github.com/gamelist1990/Debug.git)
-  CRON_TIME     (default: '0 3 * * *')
+  CRON_TIME     (default: '0 13 * * *'; interpreted in Asia/Tokyo)
   TF_VERSION    (default: 2.19.0)
   Discord       (webhook URL; enables status embed \"VPS Auto Update\")
 EOF
