@@ -22,7 +22,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from getpass import getpass
 from pathlib import Path
 from typing import Optional
@@ -725,13 +725,26 @@ def _notify_discord(rc: int, status_code: str, detail: str) -> None:
     import json
     from urllib import request as _urlreq, error as _urlerr
 
-    webhook = os.environ.get("Discord") or os.environ.get("DISCORD_WEBHOOK")
+    webhook = (os.environ.get("Discord") or os.environ.get("DISCORD_WEBHOOK") or "").strip()
     if not webhook:
         log("[discord] webhook not set — skipping notify")
         return
 
+    # Discordは既定の Python-urllib User-Agentを拒否して403を返す場合があるため、
+    # ブラウザー互換のUser-AgentとAcceptヘッダーを全リクエストへ明示する。
+    request_headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Accept": "application/json",
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36 "
+            "XServer-Free-VPS-Monitor/1.0"
+        ),
+    }
+
     meta = _DISCORD_STATUS_META.get(status_code, _DISCORD_STATUS_META["exception"])
-    ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    ts = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
     try:
         host_name = os.uname().nodename  # type: ignore[attr-defined]
     except Exception:
@@ -854,8 +867,12 @@ def _notify_discord(rc: int, status_code: str, detail: str) -> None:
 
     if cached_id:
         patch_url = webhook.rstrip("/") + f"/messages/{cached_id}"
-        req = _urlreq.Request(patch_url, data=payload_bytes, method="PATCH",
-                              headers={"Content-Type": "application/json"})
+        req = _urlreq.Request(
+            patch_url,
+            data=payload_bytes,
+            method="PATCH",
+            headers=request_headers,
+        )
         try:
             with _urlreq.urlopen(req, timeout=10) as resp:
                 if 200 <= resp.status < 300:
@@ -863,7 +880,11 @@ def _notify_discord(rc: int, status_code: str, detail: str) -> None:
                     return
                 log(f"[discord] PATCH returned HTTP {resp.status}; will POST fresh")
         except _urlerr.HTTPError as e:
-            log(f"[discord] PATCH HTTPError {e.code} — will POST fresh")
+            try:
+                error_body = e.read().decode("utf-8", errors="replace")[:500]
+            except Exception:
+                error_body = "(response body unavailable)"
+            log(f"[discord] PATCH HTTP {e.code}: {error_body} — will POST fresh")
             if cached_from is not None:
                 try:
                     cached_from.unlink()
@@ -874,8 +895,12 @@ def _notify_discord(rc: int, status_code: str, detail: str) -> None:
 
     # ---- POST a new message ----
     post_url = webhook + ("&wait=true" if "?" in webhook else "?wait=true")
-    req = _urlreq.Request(post_url, data=payload_bytes, method="POST",
-                          headers={"Content-Type": "application/json"})
+    req = _urlreq.Request(
+        post_url,
+        data=payload_bytes,
+        method="POST",
+        headers=request_headers,
+    )
     try:
         with _urlreq.urlopen(req, timeout=10) as resp:
             body = resp.read().decode("utf-8", errors="replace")
@@ -890,8 +915,16 @@ def _notify_discord(rc: int, status_code: str, detail: str) -> None:
                 log(f"[discord] sent but failed to cache id: {e}")
         else:
             log("[discord] POST succeeded but no message ID in response")
+    except _urlerr.HTTPError as e:
+        try:
+            error_body = e.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            error_body = "(response body unavailable)"
+        log(f"[discord] POST HTTP {e.code}: {error_body}")
+    except _urlerr.URLError as e:
+        log(f"[discord] POST network error: {e.reason}")
     except Exception as e:
-        log(f"[discord] POST failed: {e}")
+        log(f"[discord] POST failed: {type(e).__name__}: {e}")
 
 
 def _solve_captcha(page) -> Optional[str]:
