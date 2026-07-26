@@ -604,11 +604,10 @@ def _read_suspended_message(page) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Discord webhook 通知 (Python 側 / upsert パターン)
+# Discord webhook 通知 (upsert パターン)
 # ---------------------------------------------------------------------------
-# vps_setup.sh の notify_discord と挙動を合わせる。初回は POST してメッセージ
-# ID を discord_msg_id に保存、以降の実行では PATCH で同じメッセージを
-# 上書きしてチャンネルを埋め尽くさないようにする。
+# 初回は POST してメッセージ ID を discord_msg_id に保存、以降の実行では
+# PATCH で同じメッセージを上書きしてチャンネルを埋め尽くさないようにする。
 #
 # status_code -> 色 / 絵文字 / タイトル のマッピング
 _DISCORD_STATUS_META = {
@@ -713,8 +712,8 @@ def _format_next_date_jp(d) -> str:
 def _discord_msg_id_paths() -> list:
     """discord_msg_id を保存/読出する可能性のあるパス一覧。
 
-    優先順位: 1) BASE_DIR/discord_msg_id (Python がデフォルトで書く場所)
-              2) BASE_DIR/../discord_msg_id (vps_setup.sh の INSTALL_DIR)
+    優先順位: 1) BASE_DIR/discord_msg_id
+              2) BASE_DIR/../discord_msg_id（旧シェル実装との互換読出し用）
     """
     paths = [Path(BASE_DIR) / "discord_msg_id"]
     paths.append(Path(BASE_DIR).parent / "discord_msg_id")
@@ -861,7 +860,6 @@ def _notify_discord(rc: int, status_code: str, detail: str) -> None:
             with _urlreq.urlopen(req, timeout=10) as resp:
                 if 200 <= resp.status < 300:
                     log(f"[discord] message updated (id={cached_id})")
-                    _mark_discord_notified()
                     return
                 log(f"[discord] PATCH returned HTTP {resp.status}; will POST fresh")
         except _urlerr.HTTPError as e:
@@ -892,19 +890,8 @@ def _notify_discord(rc: int, status_code: str, detail: str) -> None:
                 log(f"[discord] sent but failed to cache id: {e}")
         else:
             log("[discord] POST succeeded but no message ID in response")
-        _mark_discord_notified()
     except Exception as e:
         log(f"[discord] POST failed: {e}")
-
-
-def _mark_discord_notified() -> None:
-    """bash 側の notify_discord が二重送信しないようマーカーを置く。"""
-    try:
-        (Path(BASE_DIR) / ".discord_notified_by_python").write_text(
-            datetime.utcnow().isoformat() + "\n", encoding="utf-8"
-        )
-    except Exception:
-        pass
 
 
 def _solve_captcha(page) -> Optional[str]:
@@ -1298,7 +1285,8 @@ def main() -> int:
         log(f"[FATAL] cloakbrowser not installed: {e}")
         log("        Install with: pip install cloakbrowser cloakbrowser[geoip]")
         try:
-            _notify_discord(2, "dependency_error", f"cloakbrowserを読み込めませんでした: {e}")
+            detail = f"cloakbrowserを読み込めませんでした: {e}"
+            _notify_discord(2, "dependency_error", detail)
         except Exception as notify_error:
             log(f"[discord] dependency error notification failed: {notify_error}")
         return 2
@@ -1372,14 +1360,16 @@ def main() -> int:
                 log(f"[proxy] preflight FAILED rc={r.returncode} stderr={r.stderr[:200]!r}")
                 log("[proxy] --> \u5bb6PC \u5074\u3067 start.ps1 / tunnel.ps1 \u304c\u8d77\u52d5\u3057\u3066\u3044\u308b\u304b\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044")
                 try:
-                    _notify_discord(3, "proxy_error", f"プロキシ事前確認に失敗しました（curl exit={r.returncode}）。")
+                    detail = f"プロキシ事前確認に失敗しました（curl exit={r.returncode}）。"
+                    _notify_discord(3, "proxy_error", detail)
                 except Exception as notify_error:
                     log(f"[discord] proxy error notification failed: {notify_error}")
                 return 3
         except Exception as _pe:
             log(f"[proxy] preflight exception: {_pe}")
             try:
-                _notify_discord(3, "proxy_error", f"プロキシ事前確認中に例外が発生しました: {_pe}")
+                detail = f"プロキシ事前確認中に例外が発生しました: {_pe}"
+                _notify_discord(3, "proxy_error", detail)
             except Exception as notify_error:
                 log(f"[discord] proxy exception notification failed: {notify_error}")
             return 3

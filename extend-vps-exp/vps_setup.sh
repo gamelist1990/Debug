@@ -216,99 +216,6 @@ install_system_packages() {
 }
 
 # ------------------------------------------------------------------
-# Discord webhook notification (edit-in-place / upsert pattern)
-# ------------------------------------------------------------------
-# If the environment variable `Discord` contains a webhook URL, send a status
-# embed after each run. The very first message ID is stored under
-# `${INSTALL_DIR}/discord_msg_id` and subsequent runs PATCH that same message
-# so the channel never spams — you get one “VPS Auto Update” status card
-# that keeps refreshing in place.
-#
-# Compatible with plain Discord webhook URLs (e.g.
-# https://discord.com/api/webhooks/<id>/<token>). No jq required.
-notify_discord() {
-  local rc="$1"
-  local url="${Discord:-}"
-  [ -z "$url" ] && return 0
-  have curl || { warn "Discord notify skipped: curl missing"; return 0; }
-
-  local status_text status_summary color emoji
-  if [ "$rc" = "0" ]; then
-    status_text="正常終了"
-    status_summary="定期確認が正常に完了しました。"
-    emoji="✅"
-    color=3066993   # green
-  else
-    status_text="実行エラー"
-    status_summary="定期確認中にエラーが発生しました。cron.logを確認してください。"
-    emoji="❌"
-    color=15158332  # red
-  fi
-
-  local ts host_name
-  ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-  host_name=$(hostname 2>/dev/null || echo "unknown")
-
-  # Minimal JSON escape for the two dynamic string fields (hostname / rc).
-  local host_esc rc_esc
-  host_esc=$(printf '%s' "$host_name" | sed 's/\\/\\\\/g; s/"/\\"/g')
-  rc_esc=$(printf '%s' "$rc" | sed 's/[^0-9-]//g')
-
-  local payload
-  payload=$(cat <<JSON
-{
-  "username": "VPS更新モニター",
-  "embeds": [{
-    "title": "${emoji} VPS 自動更新レポート",
-    "description": "**${status_text}**\n${status_summary}",
-    "color": ${color},
-    "fields": [
-      {"name": "🕐 実行スケジュール", "value": "毎日 13:00 (JST)", "inline": true},
-      {"name": "🖥️ 実行ホスト", "value": "${host_esc}", "inline": true},
-      {"name": "🔢 終了コード", "value": "${rc_esc}", "inline": true}
-    ],
-    "footer": {"text": "XServer Free VPS Auto Update • Shell fallback notification"},
-    "timestamp": "${ts}"
-  }]
-}
-JSON
-)
-
-  local msg_id_file="${INSTALL_DIR}/discord_msg_id"
-  local msg_id=""
-  [ -f "$msg_id_file" ] && msg_id=$(head -n1 "$msg_id_file" 2>/dev/null | tr -d '[:space:]')
-
-  # Try PATCH first if we already have a message ID.
-  if [ -n "$msg_id" ]; then
-    local http_code
-    http_code=$(curl -sS -o /tmp/discord_resp.json -w "%{http_code}" \
-      -X PATCH "${url}/messages/${msg_id}" \
-      -H "Content-Type: application/json" \
-      -d "$payload" 2>/dev/null || echo "000")
-    if [ "$http_code" = "200" ]; then
-      log "Discord message updated (id=${msg_id})"
-      return 0
-    fi
-    warn "Discord PATCH failed (http=${http_code}); will post a new message"
-    rm -f "$msg_id_file"
-  fi
-
-  # POST a fresh message and remember its ID so future runs can PATCH it.
-  local resp
-  resp=$(curl -sS -X POST "${url}?wait=true" \
-    -H "Content-Type: application/json" \
-    -d "$payload" 2>/dev/null || echo "")
-  msg_id=$(printf '%s' "$resp" | grep -oE '"id"[[:space:]]*:[[:space:]]*"[0-9]+"' | head -n1 | grep -oE '[0-9]+' || echo "")
-  if [ -n "$msg_id" ]; then
-    mkdir -p "$INSTALL_DIR" 2>/dev/null || true
-    printf '%s\n' "$msg_id" > "$msg_id_file"
-    log "Discord message sent (id=${msg_id})"
-  else
-    warn "Discord send failed or no message ID returned"
-  fi
-}
-
-# ------------------------------------------------------------------
 # Install
 # ------------------------------------------------------------------
 do_install() {
@@ -400,6 +307,7 @@ do_install() {
   fi
   # shellcheck disable=SC1091
   source "$VENV/bin/activate"
+
   python -m pip install --quiet --upgrade pip
 
   # ---- Python packages ----
@@ -446,10 +354,8 @@ PASSWORD=your-password
 # Optional: HTTP/HTTPS/SOCKS5 proxy (residential IP recommended for anti-bot).
 # PROXY_SERVER=socks5://user:pass@host:port
 
-# Optional: Discord webhook URL. If set, vps_setup.sh posts a status embed
-# after each run (green on success, red on failure). The webhook name and
-# embed title are both "VPS Auto Update". Subsequent runs edit the same
-# message instead of spamming, so you always see one live status card.
+# Optional: Discord webhook URL. If set, main.py posts a status embed after
+# each run. Subsequent runs edit the same message instead of spamming.
 # Discord=https://discord.com/api/webhooks/<id>/<token>
 EOF
     chmod 600 "$APP_DIR/.env"
@@ -516,17 +422,6 @@ do_run() {
   set -e
   log "$(date -Is) main.py exited rc=$rc"
 
-  # Discord notification.
-  # main.py 側 (Python) が既に通知していれば .discord_notified_by_python が
-  # 置かれているので、その場合はスキップして二重投稿を防ぐ。
-  local py_marker="$APP_DIR/.discord_notified_by_python"
-  if [ -f "$py_marker" ]; then
-    log "Discord notify: main.py already notified — skipping bash notify"
-    rm -f "$py_marker" || true
-  else
-    notify_discord "$rc" || true
-  fi
-
   return $rc
 }
 
@@ -555,8 +450,7 @@ do_cron() {
   log "logs: tail -f ${INSTALL_DIR}/cron.log"
 }
 
-# Remove any cron line that carries our marker. Also drops the Discord
-# message-ID cache so a fresh --cron run starts with a new status card.
+# Remove any cron line that carries our marker.
 do_uncron() {
   local marker="# xserver-auto-renew (managed by vps_setup.sh)"
   local current
@@ -579,12 +473,6 @@ do_uncron() {
   fi
   rm -f /tmp/.crontab.new
   log "managed cron entry removed"
-
-  # Clear the Discord upsert cache so next run posts a fresh message.
-  if [ -f "${INSTALL_DIR}/discord_msg_id" ]; then
-    rm -f "${INSTALL_DIR}/discord_msg_id"
-    log "cleared Discord message-ID cache"
-  fi
 }
 
 # ------------------------------------------------------------------
@@ -599,7 +487,7 @@ Without arguments: install (if needed) then run.
   --install   Install/update dependencies only, do not run.
   --run       Run main.py (installs first if never installed).
   --cron      Register/update the daily 13:00 JST cron job.
-  --uncron    Remove the managed cron job and Discord message cache.
+  --uncron    Remove the managed cron job.
   --help      Show this help.
 
 Env overrides:
@@ -607,7 +495,6 @@ Env overrides:
   REPO_URL      (default: https://github.com/gamelist1990/Debug.git)
   CRON_TIME     (default: '0 13 * * *'; interpreted in Asia/Tokyo)
   TF_VERSION    (default: 2.19.0)
-  Discord       (webhook URL; enables status embed \"VPS Auto Update\")
 EOF
 }
 
