@@ -52,94 +52,6 @@ log = logging.getLogger("xserver-renew").info
 
 
 # ---------------------------------------------------------------------------
-# 「まだ更新不要」時の次回スキップ管理
-# ---------------------------------------------------------------------------
-# .newApp__suspended に「YYYY年M月D日以降にお試しください」と書かれている
-# 場合、その日付までは何度実行しても結果は同じ (=更新不可)。無駄な通信、
-# ログイン試行、Cloudflare 通過試行、Discord 再通知を減らすため、その日付を
-# state ファイルに保存しておき、翌回以降の cron 実行は日付を過ぎるまで即
-# return 0 でスキップする。強制的に走らせたいときは環境変数 FORCE_RUN=1 を
-# 付けて実行すればスキップ判定は無視される。
-SKIP_STATE_PATH = Path(BASE_DIR) / "skip_until.txt"
-
-# 例: "2026年7月27日 12:00以降にお試しください"
-_NEXT_RENEWABLE_DATE_RE = re.compile(
-    r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日"
-    r"(?:\s*(\d{1,2})\s*:\s*(\d{2}))?"
-)
-
-
-def _today_jst():
-    """Return today's date in JST (the target service is JP-only)."""
-    try:
-        from zoneinfo import ZoneInfo  # Python 3.9+
-        return datetime.now(ZoneInfo("Asia/Tokyo")).date()
-    except Exception:
-        # Fallback: naive local date. Fine if host clock is close to JST.
-        return datetime.now().date()
-
-
-def _parse_next_renewable_date(text: str):
-    """Extract "YYYY年M月D日" from a suspended-banner message.
-
-    Returns a ``datetime.date`` or ``None`` if no date is found / invalid.
-    """
-    if not text:
-        return None
-    m = _NEXT_RENEWABLE_DATE_RE.search(text)
-    if not m:
-        return None
-    try:
-        from datetime import date
-        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-    except Exception:
-        return None
-
-
-def _save_skip_until(next_date) -> None:
-    """Persist "skip runs until this date" so future cron ticks exit early."""
-    if next_date is None:
-        return
-    try:
-        SKIP_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        SKIP_STATE_PATH.write_text(next_date.isoformat() + "\n", encoding="utf-8")
-        log(f"[skip] next attempt allowed on {next_date.isoformat()} (state saved)")
-    except Exception as e:
-        log(f"[skip] failed to save state: {e}")
-
-
-def _load_skip_until():
-    """Read the previously-saved skip-until date, or None if unset/invalid."""
-    try:
-        if not SKIP_STATE_PATH.is_file():
-            return None
-        raw = SKIP_STATE_PATH.read_text(encoding="utf-8").strip()
-        if not raw:
-            return None
-        from datetime import date
-        y, mo, d = raw.split("-")
-        return date(int(y), int(mo), int(d))
-    except Exception as e:
-        log(f"[skip] failed to read state: {e}")
-        return None
-
-
-def _clear_skip_until() -> None:
-    """Drop the state file (e.g. after a successful renewal)."""
-    try:
-        if SKIP_STATE_PATH.is_file():
-            SKIP_STATE_PATH.unlink()
-            log("[skip] state cleared")
-    except Exception as e:
-        log(f"[skip] failed to clear state: {e}")
-
-
-def _force_run_requested() -> bool:
-    """True if user set FORCE_RUN=1 to bypass the skip-until gate."""
-    return os.environ.get("FORCE_RUN", "").lower() in {"1", "true", "yes", "on"}
-
-
-# ---------------------------------------------------------------------------
 # PROXY_SERVER 正規化
 # ---------------------------------------------------------------------------
 # 住宅プロキシで良く見る「host:port:user:pass」形式を、
@@ -616,13 +528,13 @@ _DISCORD_STATUS_META = {
         "emoji": "\u2705",
         "title": "更新完了",
         "summary": "無料VPSの更新手続きが正常に完了しました。",
-        "action": "対応は不要です。次回も毎日13:00（JST）に自動確認します。",
+        "action": "対応は不要です。次回も毎日1:00（JST）に自動確認します。",
     },
     "not_yet_renewable": {
         "color": 3447003,
         "emoji": "\u23f3",
         "title": "更新可能時刻を待機中",
-        "summary": "現在は更新受付時間外です。毎日13:00（JST）の定期確認で、更新可能になり次第自動更新します。",
+        "summary": "現在は更新受付時間外です。毎日1:00（JST）の定期確認で、更新可能になり次第自動更新します。",
         "action": "対応は不要です。サイト指定の更新可能日以降に自動で再試行します。",
     },
     "already_renewed": {
@@ -777,18 +689,6 @@ def _notify_discord(rc: int, status_code: str, detail: str) -> None:
         "inline": False,
     })
 
-    # 「まだ更新不要」のときは detail に含まれる日付を目立たせて再掲する。
-    next_attempt_field = ""
-    if status_code == "not_yet_renewable":
-        next_date = _parse_next_renewable_date(detail)
-        if next_date is not None:
-            next_attempt_field = _format_next_date_jp(next_date) + " 以降"
-    if next_attempt_field:
-        embed["fields"].append({
-            "name": "\U0001f4c5 サイト指定の更新可能日時",
-            "value": next_attempt_field,
-            "inline": False,
-        })
     embed["fields"].append({
         "name": "\U0001f504 定期実行",
         "value": "毎日 13:00 (JST)",
@@ -1291,27 +1191,6 @@ def main() -> int:
     headless = _is_headless()
     log(f"runtime: headless={headless}, ci={is_ci}")
 
-    # ---- Skip-until short-circuit ----
-    # 前回の実行で「まだ更新不要 (YYYY年M月D日以降)」を受け取っていたら、
-    # その日付まで実際のログイン試行はスキップして即 return 0 で終わる。
-    # FORCE_RUN=1 を付ければ無視する。
-    skip_until = _load_skip_until()
-    if skip_until is not None and not _force_run_requested():
-        today = _today_jst()
-        if today < skip_until:
-            log(f"[skip] today={today.isoformat()} < skip_until={skip_until.isoformat()} -> skipping run")
-            log("[skip] to force a run anyway, re-invoke with FORCE_RUN=1")
-            detail = (
-                f"サイトで確認した更新可能日まで待機しています。\n"
-                f"次回更新可能日: {_format_next_date_jp(skip_until)} 以降"
-            )
-            try:
-                _notify_discord(0, "not_yet_renewable", detail)
-            except Exception as e:
-                log(f"[discord] skip notification failed: {e}")
-            return 0
-        log(f"[skip] today={today.isoformat()} >= skip_until={skip_until.isoformat()} -> proceeding")
-
     try:
         from cloakbrowser import launch_persistent_context
     except ImportError as e:
@@ -1453,21 +1332,6 @@ def main() -> int:
                 pass
 
     rc = 0 if succeeded else 1
-
-    # ---- Skip-until 状態の更新 ----
-    # not_yet_renewable の detail 内にある「YYYY年M月D日以降」を state に保存し、
-    # 更新完了 / 更新対象外 / 未契約になった場合は state を消す。
-    try:
-        if status_code == "not_yet_renewable":
-            next_date = _parse_next_renewable_date(detail)
-            if next_date is not None:
-                _save_skip_until(next_date)
-            else:
-                log("[skip] not_yet_renewable but no date parsed from detail; state left as-is")
-        elif status_code in {"renewed", "already_renewed", "not_contracted"}:
-            _clear_skip_until()
-    except Exception as _se:
-        log(f"[skip] state update failed: {_se}")
 
     # ---- Discord 通知は必ず飛ばす (webhook 未設定なら内部で no-op) ----
     try:
