@@ -1,0 +1,12 @@
+{
+  "name": "windows-passkey-test",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Windows Hello / OS パスキーを WebAuthn で登録・認証するローカルテストアプリ",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

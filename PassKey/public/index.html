@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Windows Passkey Test</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div class="brand-mark" aria-hidden="true">⌁</div>
+      <div>
+        <p class="eyebrow">WEBAUTHN / WINDOWS HELLO</p>
+        <h1>OS パスキーテスト</h1>
+        <p class="lead">Windows HelloなどのOS認証画面を呼び出し、パスキーの登録・認証レスポンスを確認します。</p>
+      </div>
+    </header>
+
+    <section class="notice" aria-label="重要事項">
+      <strong>秘密鍵は取得できません</strong>
+      <span>パスキーの秘密鍵はOS・TPM・認証器内で保護されます。このアプリで確認できるのはCredential ID、公開鍵情報、認証時の署名です。</span>
+    </section>
+
+    <section class="workspace">
+      <article class="card controls">
+        <div class="step-label">TEST CONTROL</div>
+        <label for="username">ユーザー名</label>
+        <input id="username" type="text" value="local-user" autocomplete="username webauthn" spellcheck="false">
+
+        <div class="actions">
+          <button id="register" class="primary" type="button">
+            <span class="button-icon">＋</span>
+            パスキーを登録
+          </button>
+          <button id="authenticate" class="secondary" type="button">
+            <span class="button-icon">✓</span>
+            OSパスキーで認証
+          </button>
+        </div>
+
+        <dl class="environment">
+          <div><dt>Secure Context</dt><dd id="secure-context">確認中</dd></div>
+          <div><dt>WebAuthn API</dt><dd id="api-support">確認中</dd></div>
+          <div><dt>Platform Authenticator</dt><dd id="platform-support">確認中</dd></div>
+        </dl>
+      </article>
+
+      <article class="card output-card">
+        <div class="output-header">
+          <div>
+            <div class="step-label">RESPONSE</div>
+            <h2>取得結果</h2>
+          </div>
+          <button id="copy" class="ghost" type="button">コピー</button>
+        </div>
+        <div id="status" class="status idle" role="status">操作を選択してください</div>
+        <pre id="output" tabindex="0">{
+  "status": "ready"
+}</pre>
+      </article>
+    </section>
+
+    <footer>
+      <span>ローカル検証専用</span>
+      <span>RP ID: localhost</span>
+    </footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
