@@ -4,3 +4,7 @@ extend-vps-exp/.env
 cap/
 homeproxy/.env
 homeproxy/.env.example
+AutoKick/.bun-cache/
+AutoKick/.tauri-bundle/
+AutoKick/.tmp-nethernet-jars/
+AutoKick/src-tauri/target/

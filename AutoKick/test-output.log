@@ -1,0 +1,15 @@
+$ node --experimental-strip-types test/index.ts
+=== Bedrock NetherNet Xbox Session CLI ===
+認証キャッシュ: C:\Users\issei\Documents\Debug\AutoKick\tokens.json
+デバッグログ: 有効 (AUTOKICK_DEBUG=0 で無効化)
+(node:44236) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+=== ログイン情報 ===
+ログイン中のXboxユーザー: funk8811
+XUID: 2535428963647242
+====================
+フレンドリクエストの自動承諾を有効にしました。
+
+1. フレンド、またはフレンドのフレンドの参加可能ワールド一覧から参加
+2. ID検索してフレンド申請

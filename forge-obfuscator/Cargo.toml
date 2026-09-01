@@ -1,0 +1,18 @@
+[package]
+name = "forge-obfuscator"
+version = "0.1.0"
+edition = "2024"
+description = "Rust/JavaScript/TypeScript/React/Vite build and obfuscation CLI"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+walkdir = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "z"
+panic = "abort"
+strip = "symbols"

@@ -1,0 +1,37 @@
+{
+  "name": "autokick",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --experimental-strip-types test/index.ts",
+    "check": "tsc --noEmit",
+    "dev": "vite",
+    "build": "vite build",
+    "build:runtime": "node scripts/package-runtime.mjs",
+    "build:windows": "bun run build:runtime && bun run tauri build",
+    "tauri": "tauri",
+    "backend": "node --experimental-strip-types src/backend/server.ts",
+    "postinstall": "node scripts/patch-bedrockx.cjs"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@types/ws": "^8.18.1",
+    "@tauri-apps/api": "^2.8.1",
+    "@tauri-apps/cli": "^2.8.4",
+    "@vitejs/plugin-react": "^5.0.4",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "vite": "^7.1.2"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "bedrockx": "file:src/library/BedrockX",
+    "bedrock-protocol": "github:PrismarineJS/bedrock-protocol#7bdc8238815114a8a237ad41bbe84b43bee040f1",
+    "ws": "^8.18.3"
+  }
+}

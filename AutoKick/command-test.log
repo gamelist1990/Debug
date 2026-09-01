@@ -1,0 +1,1307 @@
+=== Bedrock NetherNet Xbox Session CLI ===
+認証キャッシュ: C:\Users\issei\Documents\Debug\AutoKick\tokens.json
+デバッグログ: 有効 (AUTOKICK_DEBUG=0 で無効化)
+(node:29768) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+=== ログイン情報 ===
+ログイン中のXboxユーザー: funk8811
+XUID: 2535428963647242
+====================
+フレンドリクエストの自動承諾を有効にしました。
+
+1. フレンド、またはフレンドのフレンドの参加可能ワールド一覧から参加
+2. ID検索してフレンド申請
+非対話モードでワールド参加を実行します。
+フレンド、またはフレンドのフレンド経由で参加可能なXboxセッションを検索しています...
+
+[DEBUG] Session Directory API 候補診断 (2件)
+{
+  targetXuid: [32m'2535428963647242'[39m,
+  total: [33m2[39m,
+  targetOwnerMatches: [33m0[39m,
+  owners: { [32m'2535467700286103'[39m: [33m1[39m, [32m'2535432879049807'[39m: [33m1[39m },
+  titles: { [32m'1739947436'[39m: [33m1[39m, [32m'1810924247'[39m: [33m1[39m },
+  candidates: [
+    {
+      index: [33m1[39m,
+      ownerXuid: [32m'2535467700286103'[39m,
+      titleId: [32m'1810924247'[39m,
+      createTime: [32m'2026-08-11T16:44:48.4119374Z'[39m,
+      sessionRef: [Object: null prototype] {
+        scid: [32m'4fc10100-5f7a-4470-899b-280835760c07'[39m,
+        templateName: [32m'MinecraftLobby'[39m,
+        name: [32m'5438B732-2B9A-40EA-B2DD-CB6EF9DD0D61'[39m
+      },
+      hasCustomProperties: [33mtrue[39m,
+      hasRelatedCustomProperties: [33mfalse[39m,
+      hostName: [32m'PEXkurann'[39m,
+      worldName: [32m'(｣º дº)｣ﾃｽｩｩｩｩｩｩｩﾝｯ!!!!!'[39m,
+      version: [32m'1.26.40'[39m
+    },
+    {
+      index: [33m2[39m,
+      ownerXuid: [32m'2535432879049807'[39m,
+      titleId: [32m'1739947436'[39m,
+      createTime: [32m'2026-08-11T18:37:01.8553442Z'[39m,
+      sessionRef: [Object: null prototype] {
+        scid: [32m'4fc10100-5f7a-4470-899b-280835760c07'[39m,
+        templateName: [32m'MinecraftLobby'[39m,
+        name: [32m'7d9dcd47-8f18-4a46-8ee9-742845d30b0f'[39m
+      },
+      hasCustomProperties: [33mtrue[39m,
+      hasRelatedCustomProperties: [33mfalse[39m,
+      hostName: [32m'▶ Play Now!  —  0/2025 players online'[39m,
+      worldName: [32m'✦ PEXserver ✦  |  MiniGame / PVP ⚔'[39m,
+      version: [32m'1.26.40'[39m
+    }
+  ]
+}
+
+[DEBUG] Session Directory API 生レスポンス (2件)
+[
+  [Object: null prototype] {
+    type: [32m'activity'[39m,
+    sessionRef: [Object: null prototype] {
+      scid: [32m'4fc10100-5f7a-4470-899b-280835760c07'[39m,
+      templateName: [32m'MinecraftLobby'[39m,
+      name: [32m'5438B732-2B9A-40EA-B2DD-CB6EF9DD0D61'[39m
+    },
+    version: [33m1[39m,
+    titleId: [32m'1810924247'[39m,
+    ownerXuid: [32m'2535467700286103'[39m,
+    id: [32m'cd26f633-3179-4078-b26b-f67800272ed0'[39m,
+    inviteProtocol: [32m'game'[39m,
+    gameTypes: [Object: null prototype] {
+      [32m'uwp-desktop'[39m: [Object: null prototype] {
+        titleId: [32m'896928775'[39m,
+        pfn: [32m'Microsoft.MinecraftUWP_8wekyb3d8bbwe'[39m,
+        boundPfns: [ [32m'Microsoft.MinecraftforWindows10_8wekyb3d8bbwe'[39m ]
+      },
+      android: [Object: null prototype] {},
+      win32: [Object: null prototype] { titleId: [32m'1739947436'[39m },
+      ios: [Object: null prototype] {},
+      scarlett: [Object: null prototype] { titleId: [32m'1828326430'[39m },
+      tvos: [Object: null prototype] {},
+      era: [Object: null prototype] { titleId: [32m'1828326430'[39m },
+      [32m'uwp-xboxone'[39m: [Object: null prototype] {
+        titleId: [32m'1828326430'[39m,
+        pfn: [32m'Microsoft.MinecraftUWPConsole_8wekyb3d8bbwe'[39m
+      }
+    },
+    createTime: [32m'2026-08-11T16:44:48.4119374Z'[39m,
+    relatedInfo: [Object: null prototype] {
+      joinRestriction: [32m'followed'[39m,
+      closed: [33mfalse[39m,
+      maxMembersCount: [33m30[39m,
+      membersCount: [33m2[39m,
+      visibility: [32m'open'[39m,
+      inviteProtocol: [32m'game'[39m,
+      postedTime: [32m'2026-08-11T16:44:47.6005838Z'[39m
+    },
+    customProperties: [Object: null prototype] {
+      Joinability: [32m'joinable_by_friends'[39m,
+      hostName: [32m'PEXkurann'[39m,
+      ownerId: [32m'2535467700286103'[39m,
+      rakNetGUID: [32m''[39m,
+      version: [32m'1.26.40'[39m,
+      levelId: [32m'jNvMCS-6VK4='[39m,
+      worldName: [32m'(｣º дº)｣ﾃｽｩｩｩｩｩｩｩﾝｯ!!!!!'[39m,
+      worldType: [32m'Survival'[39m,
+      protocol: [33m2168[39m,
+      MemberCount: [33m1[39m,
+      MaxMemberCount: [33m5[39m,
+      BroadcastSetting: [33m3[39m,
+      LanGame: [33mtrue[39m,
+      isEditorWorld: [33mfalse[39m,
+      isHardcore: [33mfalse[39m,
+      TransportLayer: [33m2[39m,
+      OnlineCrossPlatformGame: [33mtrue[39m,
+      CrossPlayDisabled: [33mfalse[39m,
+      TitleId: [33m0[39m,
+      nonces: [Object: null prototype] {
+        [32m'2535428963647242'[39m: [32m'36cbf83c01b78280'[39m
+      },
+      SupportedConnections: [
+        [Object: null prototype] {
+          ConnectionType: [33m7[39m,
+          HostIpAddress: [32m''[39m,
+          HostPort: [33m0[39m,
+          NetherNetId: BigNumber { s: [33m1[39m, e: [33m18[39m, c: [ [33m71347[39m, [33m5339844319103[39m ] },
+          PmsgId: [32m'8e596513-a7bd-78bc-3ea6-557f09541f4b'[39m
+        }
+      ]
+    }
+  },
+  [Object: null prototype] {
+    version: [33m1[39m,
+    type: [32m'activity'[39m,
+    sessionRef: [Object: null prototype] {
+      scid: [32m'4fc10100-5f7a-4470-899b-280835760c07'[39m,
+      templateName: [32m'MinecraftLobby'[39m,
+      name: [32m'7d9dcd47-8f18-4a46-8ee9-742845d30b0f'[39m
+    },
+    titleId: [32m'1739947436'[39m,
+    ownerXuid: [32m'2535432879049807'[39m,
+    id: [32m'2799c6ca-c568-405c-a63c-884a53022311'[39m,
+    inviteProtocol: [32m'game'[39m,
+    gameTypes: [Object: null prototype] {
+      [32m'uwp-desktop'[39m: [Object: null prototype] {
+        titleId: [32m'896928775'[39m,
+        pfn: [32m'Microsoft.MinecraftUWP_8wekyb3d8bbwe'[39m,
+        boundPfns: [ [32m'Microsoft.MinecraftforWindows10_8wekyb3d8bbwe'[39m ]
+      },
+      android: [Object: null prototype] {},
+      win32: [Object: null prototype] { titleId: [32m'1739947436'[39m },
+      ios: [Object: null prototype] {},
+      scarlett: [Object: null prototype] { titleId: [32m'1828326430'[39m },
+      tvos: [Object: null prototype] {},
+      era: [Object: null prototype] { titleId: [32m'1828326430'[39m },
+      [32m'uwp-xboxone'[39m: [Object: null prototype] {
+        titleId: [32m'1828326430'[39m,
+        pfn: [32m'Microsoft.MinecraftUWPConsole_8wekyb3d8bbwe'[39m
+      }
+    },
+    createTime: [32m'2026-08-11T18:37:01.8553442Z'[39m,
+    relatedInfo: [Object: null prototype] {
+      joinRestriction: [32m'followed'[39m,
+      closed: [33mfalse[39m,
+      maxMembersCount: [33m30[39m,
+      membersCount: [33m1[39m,
+      visibility: [32m'open'[39m,
+      inviteProtocol: [32m'game'[39m,
+      postedTime: [32m'2026-08-11T16:14:13.1710127Z'[39m
+    },
+    customProperties: [Object: null prototype] {
+      BroadcastSetting: [33m3[39m,
+      CrossPlayDisabled: [33mfalse[39m,
+      Joinability: [32m'joinable_by_friends'[39m,
+      LanGame: [33mfalse[39m,
+      MaxMemberCount: [33m2025[39m,
+      MemberCount: [33m1[39m,
+      OnlineCrossPlatformGame: [33mtrue[39m,
+      SupportedConnections: [
+        [Object: null prototype] {
+          ConnectionType: [33m7[39m,
+          HostIpAddress: [32m''[39m,
+          HostPort: [33m0[39m,
+          NetherNetId: BigNumber { s: [33m1[39m, e: [33m18[39m, c: [ [33m60723[39m, [33m31925241204194[39m ] },
+          PmsgId: [32m'952a778d-3ca2-955c-721e-af0cd00febac'[39m
+        }
+      ],
+      TitleId: [33m0[39m,
+      TransportLayer: [33m2[39m,
+      levelId: [32m'level'[39m,
+      hostName: [32m'▶ Play Now!  —  0/2025 players online'[39m,
+      ownerId: [32m'2535432879049807'[39m,
+      rakNetGUID: [32m''[39m,
+      worldName: [32m'✦ PEXserver ✦  |  MiniGame / PVP ⚔'[39m,
+      worldType: [32m'Survival'[39m,
+      protocol: [33m2168[39m,
+      version: [32m'1.26.40'[39m,
+      isEditorWorld: [33mfalse[39m,
+      isHardcore: [33mfalse[39m,
+      nonces: [Object: null prototype] {}
+    }
+  }
+]
+
+[DEBUG] 重複除去後のフレンドセッション候補
+{
+  inspectedXuid: [32m'2535428963647242'[39m,
+  apiResultCount: [33m2[39m,
+  inspectedOwnerMatches: [33m0[39m,
+  uniqueCount: [33m2[39m
+}
+
+[DEBUG] 候補 1: セッション詳細を取得
+[Object: null prototype] {
+  scid: [32m'4fc10100-5f7a-4470-899b-280835760c07'[39m,
+  templateName: [32m'MinecraftLobby'[39m,
+  name: [32m'5438B732-2B9A-40EA-B2DD-CB6EF9DD0D61'[39m
+}
+
+[DEBUG] 候補 2: セッション詳細を取得
+[Object: null prototype] {
+  scid: [32m'4fc10100-5f7a-4470-899b-280835760c07'[39m,
+  templateName: [32m'MinecraftLobby'[39m,
+  name: [32m'7d9dcd47-8f18-4a46-8ee9-742845d30b0f'[39m
+}
+
+[DEBUG] 候補 1: セッション詳細
+{
+  type: [32m'activity'[39m,
+  sessionRef: [Object: null prototype] {
+    scid: [32m'4fc10100-5f7a-4470-899b-280835760c07'[39m,
+    templateName: [32m'MinecraftLobby'[39m,
+    name: [32m'5438B732-2B9A-40EA-B2DD-CB6EF9DD0D61'[39m
+  },
+  version: [33m1[39m,
+  titleId: [32m'1810924247'[39m,
+  ownerXuid: [32m'2535467700286103'[39m,
+  id: [32m'cd26f633-3179-4078-b26b-f67800272ed0'[39m,
+  inviteProtocol: [32m'game'[39m,
+  gameTypes: [Object: null prototype] {
+    [32m'uwp-desktop'[39m: [Object: null prototype] {
+      titleId: [32m'896928775'[39m,
+      pfn: [32m'Microsoft.MinecraftUWP_8wekyb3d8bbwe'[39m,
+      boundPfns: [ [32m'Microsoft.MinecraftforWindows10_8wekyb3d8bbwe'[39m ]
+    },
+    android: [Object: null prototype] {},
+    win32: [Object: null prototype] { titleId: [32m'1739947436'[39m },
+    ios: [Object: null prototype] {},
+    scarlett: [Object: null prototype] { titleId: [32m'1828326430'[39m },
+    tvos: [Object: null prototype] {},
+    era: [Object: null prototype] { titleId: [32m'1828326430'[39m },
+    [32m'uwp-xboxone'[39m: [Object: null prototype] {
+      titleId: [32m'1828326430'[39m,
+      pfn: [32m'Microsoft.MinecraftUWPConsole_8wekyb3d8bbwe'[39m
+    }
+  },
+  createTime: [32m'2026-08-11T16:44:48.4119374Z'[39m,
+  relatedInfo: [Object: null prototype] {
+    joinRestriction: [32m'followed'[39m,
+    closed: [33mfalse[39m,
+    maxMembersCount: [33m30[39m,
+    membersCount: [33m2[39m,
+    visibility: [32m'open'[39m,
+    inviteProtocol: [32m'game'[39m,
+    postedTime: [32m'2026-08-11T16:44:47.6005838Z'[39m
+  },
+  customProperties: [Object: null prototype] {
+    Joinability: [32m'joinable_by_friends'[39m,
+    hostName: [32m'PEXkurann'[39m,
+    ownerId: [32m'2535467700286103'[39m,
+    rakNetGUID: [32m''[39m,
+    version: [32m'1.26.40'[39m,
+    levelId: [32m'jNvMCS-6VK4='[39m,
+    worldName: [32m'(｣º дº)｣ﾃｽｩｩｩｩｩｩｩﾝｯ!!!!!'[39m,
+    worldType: [32m'Survival'[39m,
+    protocol: [33m2168[39m,
+    MemberCount: [33m1[39m,
+    MaxMemberCount: [33m5[39m,
+    BroadcastSetting: [33m3[39m,
+    LanGame: [33mtrue[39m,
+    isEditorWorld: [33mfalse[39m,
+    isHardcore: [33mfalse[39m,
+    TransportLayer: [33m2[39m,
+    OnlineCrossPlatformGame: [33mtrue[39m,
+    CrossPlayDisabled: [33mfalse[39m,
+    TitleId: [33m0[39m,
+    nonces: [Object: null prototype] { [32m'2535428963647242'[39m: [32m'36cbf83c01b78280'[39m },
+    SupportedConnections: [
+      [Object: null prototype] {
+        ConnectionType: [33m7[39m,
+        HostIpAddress: [32m''[39m,
+        HostPort: [33m0[39m,
+        NetherNetId: BigNumber { s: [33m1[39m, e: [33m18[39m, c: [ [33m71347[39m, [33m5339844319103[39m ] },
+        PmsgId: [32m'8e596513-a7bd-78bc-3ea6-557f09541f4b'[39m
+      }
+    ]
+  },
+  membersInfo: [Object: null prototype] {
+    first: [33m0[39m,
+    next: [33m8[39m,
+    count: [33m2[39m,
+    accepted: [33m2[39m,
+    active: [33m1[39m
+  },
+  constants: [Object: null prototype] {
+    system: [Object: null prototype] {
+      readyRemovalTimeout: [33m240000[39m,
+      reservedRemovalTimeout: [33m240000[39m,
+      sessionEmptyTimeout: [33m0[39m,
+      inactiveRemovalTimeout: [33m300000[39m,
+      version: [33m1[39m,
+      maxMembersCount: [33m30[39m,
+      visibility: [32m'open'[39m,
+      capabilities: [Object: null prototype] {
+        connectivity: [33mtrue[39m,
+        connectionRequiredForActiveMembers: [33mtrue[39m,
+        gameplay: [33mtrue[39m,
+        crossPlay: [33mtrue[39m,
+        userAuthorizationStyle: [33mtrue[39m
+      },
+      inviteProtocol: [32m'game'[39m,
+      memberInitialization: [Object: null prototype] { membersNeededToStart: [33m1[39m }
+    },
+    custom: [Object: null prototype] {}
+  },
+  properties: [Object: null prototype] {
+    system: [Object: null prototype] {
+      joinRestriction: [32m'followed'[39m,
+      readRestriction: [32m'followed'[39m,
+      turn: []
+    },
+    custom: [Object: null prototype] {
+      Joinability: [32m'joinable_by_friends'[39m,
+      hostName: [32m'PEXkurann'[39m,
+      ownerId: [32m'2535467700286103'[39m,
+      rakNetGUID: [32m''[39m,
+      version: [32m'1.26.40'[39m,
+      levelId: [32m'jNvMCS-6VK4='[39m,
+      worldName: [32m'(｣º дº)｣ﾃｽｩｩｩｩｩｩｩﾝｯ!!!!!'[39m,
+      worldType: [32m'Survival'[39m,
+      protocol: [33m2168[39m,
+      MemberCount: [33m1[39m,
+      MaxMemberCount: [33m5[39m,
+      BroadcastSetting: [33m3[39m,
+      LanGame: [33mtrue[39m,
+      isEditorWorld: [33mfalse[39m,
+      isHardcore: [33mfalse[39m,
+      TransportLayer: [33m2[39m,
+      OnlineCrossPlatformGame: [33mtrue[39m,
+      CrossPlayDisabled: [33mfalse[39m,
+      TitleId: [33m0[39m,
+      nonces: [Object: null prototype] {
+        [32m'2535428963647242'[39m: [32m'36cbf83c01b78280'[39m
+      },
+      SupportedConnections: [
+        [Object: null prototype] {
+          ConnectionType: [33m7[39m,
+          HostIpAddress: [32m''[39m,
+          HostPort: [33m0[39m,
+          NetherNetId: BigNumber { s: [33m1[39m, e: [33m18[39m, c: [ [33m71347[39m, [33m5339844319103[39m ] },
+          PmsgId: [32m'8e596513-a7bd-78bc-3ea6-557f09541f4b'[39m
+        }
+      ]
+    }
+  },
+  servers: [Object: null prototype] {},
+  members: [Object: null prototype] {
+    [32m'0'[39m: [Object: null prototype] {
+      next: [33m7[39m,
+      joinTime: [32m'2026-08-11T16:44:47.6005838Z'[39m,
+      constants: [Object: null prototype] {
+        system: [Object: null prototype] {
+          initialize: [33mtrue[39m,
+          xuid: [32m'2535467700286103'[39m,
+          index: [33m0[39m
+        },
+        custom: [Object: null prototype] {}
+      },
+      properties: [Object: null prototype] {
+        system: [Object: null prototype] {
+          subscription: [Object: null prototype] {
+            id: [32m'B9F17735-2CA1-472B-A440-9CE5A43B0778'[39m,
+            changeTypes: [ [32m'everything'[39m ]
+          },
+          active: [33mtrue[39m,
+          connection: [32m'fee8e6b9-f61d-44e5-9f20-5a87f7beb955'[39m
+        },
+        custom: [Object: null prototype] {}
+      },
+      gamertag: [32m'PEXkurann'[39m,
+      activeTitleId: [32m'1810924247'[39m
+    },
+    [32m'7'[39m: [Object: null prototype] {
+      next: [33m8[39m,
+      joinTime: [32m'2026-08-11T19:08:52.7790613Z'[39m,
+      constants: [Object: null prototype] {
+        system: [Object: null prototype] {
+          initialize: [33mtrue[39m,
+          xuid: [32m'2535428963647242'[39m,
+          index: [33m7[39m
+        },
+        custom: [Object: null prototype] {}
+      },
+      properties: [Object: null prototype] {
+        system: [Object: null prototype] {},
+        custom: [Object: null prototype] {}
+      },
+      gamertag: [32m'funk8811'[39m
+    }
+  },
+  correlationId: [32m'fee46b01-9fe2-7284-ec88-976ba45718a7'[39m,
+  contractVersion: [33m107[39m,
+  branch: [32m'c3f891ad-9f0e-4a19-8fce-b808e499757a'[39m,
+  changeNumber: [33m88[39m,
+  startTime: [32m'2026-08-11T16:44:47.6005838Z'[39m,
+  nextTimer: [32m'2026-08-11T19:13:53.1540874Z'[39m
+}
+
+[DEBUG] 候補 2: セッション詳細
+{
+  version: [33m1[39m,
+  type: [32m'activity'[39m,
+  sessionRef: [Object: null prototype] {
+    scid: [32m'4fc10100-5f7a-4470-899b-280835760c07'[39m,
+    templateName: [32m'MinecraftLobby'[39m,
+    name: [32m'7d9dcd47-8f18-4a46-8ee9-742845d30b0f'[39m
+  },
+  titleId: [32m'1739947436'[39m,
+  ownerXuid: [32m'2535432879049807'[39m,
+  id: [32m'2799c6ca-c568-405c-a63c-884a53022311'[39m,
+  inviteProtocol: [32m'game'[39m,
+  gameTypes: [Object: null prototype] {
+    [32m'uwp-desktop'[39m: [Object: null prototype] {
+      titleId: [32m'896928775'[39m,
+      pfn: [32m'Microsoft.MinecraftUWP_8wekyb3d8bbwe'[39m,
+      boundPfns: [ [32m'Microsoft.MinecraftforWindows10_8wekyb3d8bbwe'[39m ]
+    },
+    android: [Object: null prototype] {},
+    win32: [Object: null prototype] { titleId: [32m'1739947436'[39m },
+    ios: [Object: null prototype] {},
+    scarlett: [Object: null prototype] { titleId: [32m'1828326430'[39m },
+    tvos: [Object: null prototype] {},
+    era: [Object: null prototype] { titleId: [32m'1828326430'[39m },
+    [32m'uwp-xboxone'[39m: [Object: null prototype] {
+      titleId: [32m'1828326430'[39m,
+      pfn: [32m'Microsoft.MinecraftUWPConsole_8wekyb3d8bbwe'[39m
+    }
+  },
+  createTime: [32m'2026-08-11T18:37:01.8553442Z'[39m,
+  relatedInfo: [Object: null prototype] {
+    joinRestriction: [32m'followed'[39m,
+    closed: [33mfalse[39m,
+    maxMembersCount: [33m30[39m,
+    membersCount: [33m1[39m,
+    visibility: [32m'open'[39m,
+    inviteProtocol: [32m'game'[39m,
+    postedTime: [32m'2026-08-11T16:14:13.1710127Z'[39m
+  },
+  customProperties: [Object: null prototype] {
+    BroadcastSetting: [33m3[39m,
+    CrossPlayDisabled: [33mfalse[39m,
+    Joinability: [32m'joinable_by_friends'[39m,
+    LanGame: [33mfalse[39m,
+    MaxMemberCount: [33m2025[39m,
+    MemberCount: [33m1[39m,
+    OnlineCrossPlatformGame: [33mtrue[39m,
+    SupportedConnections: [
+      [Object: null prototype] {
+        ConnectionType: [33m7[39m,
+        HostIpAddress: [32m''[39m,
+        HostPort: [33m0[39m,
+        NetherNetId: BigNumber { s: [33m1[39m, e: [33m18[39m, c: [ [33m60723[39m, [33m31925241204194[39m ] },
+        PmsgId: [32m'952a778d-3ca2-955c-721e-af0cd00febac'[39m
+      }
+    ],
+    TitleId: [33m0[39m,
+    TransportLayer: [33m2[39m,
+    levelId: [32m'level'[39m,
+    hostName: [32m'▶ Play Now!  —  0/2025 players online'[39m,
+    ownerId: [32m'2535432879049807'[39m,
+    rakNetGUID: [32m''[39m,
+    worldName: [32m'✦ PEXserver ✦  |  MiniGame / PVP ⚔'[39m,
+    worldType: [32m'Survival'[39m,
+    protocol: [33m2168[39m,
+    version: [32m'1.26.40'[39m,
+    isEditorWorld: [33mfalse[39m,
+    isHardcore: [33mfalse[39m,
+    nonces: [Object: null prototype] {}
+  },
+  membersInfo: [Object: null prototype] {
+    first: [33m0[39m,
+    next: [33m1[39m,
+    count: [33m1[39m,
+    accepted: [33m1[39m,
+    active: [33m1[39m
+  },
+  constants: [Object: null prototype] {
+    system: [Object: null prototype] {
+      readyRemovalTimeout: [33m240000[39m,
+      reservedRemovalTimeout: [33m240000[39m,
+      sessionEmptyTimeout: [33m0[39m,
+      inactiveRemovalTimeout: [33m300000[39m,
+      version: [33m1[39m,
+      maxMembersCount: [33m30[39m,
+      visibility: [32m'open'[39m,
+      capabilities: [Object: null prototype] {
+        connectivity: [33mtrue[39m,
+        connectionRequiredForActiveMembers: [33mtrue[39m,
+        gameplay: [33mtrue[39m,
+        crossPlay: [33mtrue[39m,
+        userAuthorizationStyle: [33mtrue[39m
+      },
+      inviteProtocol: [32m'game'[39m,
+      memberInitialization: [Object: null prototype] { membersNeededToStart: [33m1[39m }
+    },
+    custom: [Object: null prototype] {}
+  },
+  properties: [Object: null prototype] {
+    system: [Object: null prototype] {
+      joinRestriction: [32m'followed'[39m,
+      readRestriction: [32m'followed'[39m,
+      turn: []
+    },
+    custom: [Object: null prototype] {
+      BroadcastSetting: [33m3[39m,
+      CrossPlayDisabled: [33mfalse[39m,
+      Joinability: [32m'joinable_by_friends'[39m,
+      LanGame: [33mfalse[39m,
+      MaxMemberCount: [33m2025[39m,
+      MemberCount: [33m1[39m,
+      OnlineCrossPlatformGame: [33mtrue[39m,
+      SupportedConnections: [
+        [Object: null prototype] {
+          ConnectionType: [33m7[39m,
+          HostIpAddress: [32m''[39m,
+          HostPort: [33m0[39m,
+          NetherNetId: BigNumber { s: [33m1[39m, e: [33m18[39m, c: [ [33m60723[39m, [33m31925241204194[39m ] },
+          PmsgId: [32m'952a778d-3ca2-955c-721e-af0cd00febac'[39m
+        }
+      ],
+      TitleId: [33m0[39m,
+      TransportLayer: [33m2[39m,
+      levelId: [32m'level'[39m,
+      hostName: [32m'▶ Play Now!  —  0/2025 players online'[39m,
+      ownerId: [32m'2535432879049807'[39m,
+      rakNetGUID: [32m''[39m,
+      worldName: [32m'✦ PEXserver ✦  |  MiniGame / PVP ⚔'[39m,
+      worldType: [32m'Survival'[39m,
+      protocol: [33m2168[39m,
+      version: [32m'1.26.40'[39m,
+      isEditorWorld: [33mfalse[39m,
+      isHardcore: [33mfalse[39m,
+      nonces: [Object: null prototype] {}
+    }
+  },
+  servers: [Object: null prototype] {},
+  members: [Object: null prototype] {
+    [32m'0'[39m: [Object: null prototype] {
+      next: [33m1[39m,
+      joinTime: [32m'2026-08-11T16:14:13.1710127Z'[39m,
+      constants: [Object: null prototype] {
+        system: [Object: null prototype] {
+          initialize: [33mtrue[39m,
+          xuid: [32m'2535432879049807'[39m,
+          index: [33m0[39m
+        },
+        custom: [Object: null prototype] {}
+      },
+      properties: [Object: null prototype] {
+        system: [Object: null prototype] {
+          subscription: [Object: null prototype] {
+            id: [32m'91822faf-40a5-4ae7-b2f7-2806b78a0c36'[39m,
+            changeTypes: [ [32m'everything'[39m ]
+          },
+          active: [33mtrue[39m,
+          connection: [32m'50d8ca51-af97-4614-b225-c0bf160fc3bb'[39m
+        },
+        custom: [Object: null prototype] {}
+      },
+      gamertag: [32m'PEXserver'[39m,
+      activeTitleId: [32m'1739947436'[39m
+    }
+  },
+  correlationId: [32m'8ef64ac5-b475-2bed-e386-bbea7ee94d78'[39m,
+  contractVersion: [33m107[39m,
+  branch: [32m'b48164aa-6b22-44a5-ab11-14b4ec99da65'[39m,
+  changeNumber: [33m377[39m,
+  startTime: [32m'2026-08-11T16:14:13.1710127Z'[39m
+}
+
+[DEBUG] 詳細取得後のセッション (2件)
+[
+  {
+    type: [32m'activity'[39m,
+    sessionRef: [Object: null prototype] {
+      scid: [32m'4fc10100-5f7a-4470-899b-280835760c07'[39m,
+      templateName: [32m'MinecraftLobby'[39m,
+      name: [32m'5438B732-2B9A-40EA-B2DD-CB6EF9DD0D61'[39m
+    },
+    version: [33m1[39m,
+    titleId: [32m'1810924247'[39m,
+    ownerXuid: [32m'2535467700286103'[39m,
+    id: [32m'cd26f633-3179-4078-b26b-f67800272ed0'[39m,
+    inviteProtocol: [32m'game'[39m,
+    gameTypes: [Object: null prototype] {
+      [32m'uwp-desktop'[39m: [Object: null prototype] {
+        titleId: [32m'896928775'[39m,
+        pfn: [32m'Microsoft.MinecraftUWP_8wekyb3d8bbwe'[39m,
+        boundPfns: [ [32m'Microsoft.MinecraftforWindows10_8wekyb3d8bbwe'[39m ]
+      },
+      android: [Object: null prototype] {},
+      win32: [Object: null prototype] { titleId: [32m'1739947436'[39m },
+      ios: [Object: null prototype] {},
+      scarlett: [Object: null prototype] { titleId: [32m'1828326430'[39m },
+      tvos: [Object: null prototype] {},
+      era: [Object: null prototype] { titleId: [32m'1828326430'[39m },
+      [32m'uwp-xboxone'[39m: [Object: null prototype] {
+        titleId: [32m'1828326430'[39m,
+        pfn: [32m'Microsoft.MinecraftUWPConsole_8wekyb3d8bbwe'[39m
+      }
+    },
+    createTime: [32m'2026-08-11T16:44:48.4119374Z'[39m,
+    relatedInfo: [Object: null prototype] {
+      joinRestriction: [32m'followed'[39m,
+      closed: [33mfalse[39m,
+      maxMembersCount: [33m30[39m,
+      membersCount: [33m2[39m,
+      visibility: [32m'open'[39m,
+      inviteProtocol: [32m'game'[39m,
+      postedTime: [32m'2026-08-11T16:44:47.6005838Z'[39m
+    },
+    customProperties: [Object: null prototype] {
+      Joinability: [32m'joinable_by_friends'[39m,
+      hostName: [32m'PEXkurann'[39m,
+      ownerId: [32m'2535467700286103'[39m,
+      rakNetGUID: [32m''[39m,
+      version: [32m'1.26.40'[39m,
+      levelId: [32m'jNvMCS-6VK4='[39m,
+      worldName: [32m'(｣º дº)｣ﾃｽｩｩｩｩｩｩｩﾝｯ!!!!!'[39m,
+      worldType: [32m'Survival'[39m,
+      protocol: [33m2168[39m,
+      MemberCount: [33m1[39m,
+      MaxMemberCount: [33m5[39m,
+      BroadcastSetting: [33m3[39m,
+      LanGame: [33mtrue[39m,
+      isEditorWorld: [33mfalse[39m,
+      isHardcore: [33mfalse[39m,
+      TransportLayer: [33m2[39m,
+      OnlineCrossPlatformGame: [33mtrue[39m,
+      CrossPlayDisabled: [33mfalse[39m,
+      TitleId: [33m0[39m,
+      nonces: [Object: null prototype] {
+        [32m'2535428963647242'[39m: [32m'36cbf83c01b78280'[39m
+      },
+      SupportedConnections: [
+        [Object: null prototype] {
+          ConnectionType: [33m7[39m,
+          HostIpAddress: [32m''[39m,
+          HostPort: [33m0[39m,
+          NetherNetId: BigNumber { s: [33m1[39m, e: [33m18[39m, c: [ [33m71347[39m, [33m5339844319103[39m ] },
+          PmsgId: [32m'8e596513-a7bd-78bc-3ea6-557f09541f4b'[39m
+        }
+      ]
+    },
+    membersInfo: [Object: null prototype] {
+      first: [33m0[39m,
+      next: [33m8[39m,
+      count: [33m2[39m,
+      accepted: [33m2[39m,
+      active: [33m1[39m
+    },
+    constants: [Object: null prototype] {
+      system: [Object: null prototype] {
+        readyRemovalTimeout: [33m240000[39m,
+        reservedRemovalTimeout: [33m240000[39m,
+        sessionEmptyTimeout: [33m0[39m,
+        inactiveRemovalTimeout: [33m300000[39m,
+        version: [33m1[39m,
+        maxMembersCount: [33m30[39m,
+        visibility: [32m'open'[39m,
+        capabilities: [Object: null prototype] {
+          connectivity: [33mtrue[39m,
+          connectionRequiredForActiveMembers: [33mtrue[39m,
+          gameplay: [33mtrue[39m,
+          crossPlay: [33mtrue[39m,
+          userAuthorizationStyle: [33mtrue[39m
+        },
+        inviteProtocol: [32m'game'[39m,
+        memberInitialization: [Object: null prototype] { membersNeededToStart: [33m1[39m }
+      },
+      custom: [Object: null prototype] {}
+    },
+    properties: [Object: null prototype] {
+      system: [Object: null prototype] {
+        joinRestriction: [32m'followed'[39m,
+        readRestriction: [32m'followed'[39m,
+        turn: []
+      },
+      custom: [Object: null prototype] {
+        Joinability: [32m'joinable_by_friends'[39m,
+        hostName: [32m'PEXkurann'[39m,
+        ownerId: [32m'2535467700286103'[39m,
+        rakNetGUID: [32m''[39m,
+        version: [32m'1.26.40'[39m,
+        levelId: [32m'jNvMCS-6VK4='[39m,
+        worldName: [32m'(｣º дº)｣ﾃｽｩｩｩｩｩｩｩﾝｯ!!!!!'[39m,
+        worldType: [32m'Survival'[39m,
+        protocol: [33m2168[39m,
+        MemberCount: [33m1[39m,
+        MaxMemberCount: [33m5[39m,
+        BroadcastSetting: [33m3[39m,
+        LanGame: [33mtrue[39m,
+        isEditorWorld: [33mfalse[39m,
+        isHardcore: [33mfalse[39m,
+        TransportLayer: [33m2[39m,
+        OnlineCrossPlatformGame: [33mtrue[39m,
+        CrossPlayDisabled: [33mfalse[39m,
+        TitleId: [33m0[39m,
+        nonces: [Object: null prototype] {
+          [32m'2535428963647242'[39m: [32m'36cbf83c01b78280'[39m
+        },
+        SupportedConnections: [
+          [Object: null prototype] {
+            ConnectionType: [33m7[39m,
+            HostIpAddress: [32m''[39m,
+            HostPort: [33m0[39m,
+            NetherNetId: BigNumber { s: [33m1[39m, e: [33m18[39m, c: [ [33m71347[39m, [33m5339844319103[39m ] },
+            PmsgId: [32m'8e596513-a7bd-78bc-3ea6-557f09541f4b'[39m
+          }
+        ]
+      }
+    },
+    servers: [Object: null prototype] {},
+    members: [Object: null prototype] {
+      [32m'0'[39m: [Object: null prototype] {
+        next: [33m7[39m,
+        joinTime: [32m'2026-08-11T16:44:47.6005838Z'[39m,
+        constants: [Object: null prototype] {
+          system: [Object: null prototype] {
+            initialize: [33mtrue[39m,
+            xuid: [32m'2535467700286103'[39m,
+            index: [33m0[39m
+          },
+          custom: [Object: null prototype] {}
+        },
+        properties: [Object: null prototype] {
+          system: [Object: null prototype] {
+            subscription: [Object: null prototype] {
+              id: [32m'B9F17735-2CA1-472B-A440-9CE5A43B0778'[39m,
+              changeTypes: [ [32m'everything'[39m ]
+            },
+            active: [33mtrue[39m,
+            connection: [32m'fee8e6b9-f61d-44e5-9f20-5a87f7beb955'[39m
+          },
+          custom: [Object: null prototype] {}
+        },
+        gamertag: [32m'PEXkurann'[39m,
+        activeTitleId: [32m'1810924247'[39m
+      },
+      [32m'7'[39m: [Object: null prototype] {
+        next: [33m8[39m,
+        joinTime: [32m'2026-08-11T19:08:52.7790613Z'[39m,
+        constants: [Object: null prototype] {
+          system: [Object: null prototype] {
+            initialize: [33mtrue[39m,
+            xuid: [32m'2535428963647242'[39m,
+            index: [33m7[39m
+          },
+          custom: [Object: null prototype] {}
+        },
+        properties: [Object: null prototype] {
+          system: [Object: null prototype] {},
+          custom: [Object: null prototype] {}
+        },
+        gamertag: [32m'funk8811'[39m
+      }
+    },
+    correlationId: [32m'fee46b01-9fe2-7284-ec88-976ba45718a7'[39m,
+    contractVersion: [33m107[39m,
+    branch: [32m'c3f891ad-9f0e-4a19-8fce-b808e499757a'[39m,
+    changeNumber: [33m88[39m,
+    startTime: [32m'2026-08-11T16:44:47.6005838Z'[39m,
+    nextTimer: [32m'2026-08-11T19:13:53.1540874Z'[39m
+  },
+  {
+    version: [33m1[39m,
+    type: [32m'activity'[39m,
+    sessionRef: [Object: null prototype] {
+      scid: [32m'4fc10100-5f7a-4470-899b-280835760c07'[39m,
+      templateName: [32m'MinecraftLobby'[39m,
+      name: [32m'7d9dcd47-8f18-4a46-8ee9-742845d30b0f'[39m
+    },
+    titleId: [32m'1739947436'[39m,
+    ownerXuid: [32m'2535432879049807'[39m,
+    id: [32m'2799c6ca-c568-405c-a63c-884a53022311'[39m,
+    inviteProtocol: [32m'game'[39m,
+    gameTypes: [Object: null prototype] {
+      [32m'uwp-desktop'[39m: [Object: null prototype] {
+        titleId: [32m'896928775'[39m,
+        pfn: [32m'Microsoft.MinecraftUWP_8wekyb3d8bbwe'[39m,
+        boundPfns: [ [32m'Microsoft.MinecraftforWindows10_8wekyb3d8bbwe'[39m ]
+      },
+      android: [Object: null prototype] {},
+      win32: [Object: null prototype] { titleId: [32m'1739947436'[39m },
+      ios: [Object: null prototype] {},
+      scarlett: [Object: null prototype] { titleId: [32m'1828326430'[39m },
+      tvos: [Object: null prototype] {},
+      era: [Object: null prototype] { titleId: [32m'1828326430'[39m },
+      [32m'uwp-xboxone'[39m: [Object: null prototype] {
+        titleId: [32m'1828326430'[39m,
+        pfn: [32m'Microsoft.MinecraftUWPConsole_8wekyb3d8bbwe'[39m
+      }
+    },
+    createTime: [32m'2026-08-11T18:37:01.8553442Z'[39m,
+    relatedInfo: [Object: null prototype] {
+      joinRestriction: [32m'followed'[39m,
+      closed: [33mfalse[39m,
+      maxMembersCount: [33m30[39m,
+      membersCount: [33m1[39m,
+      visibility: [32m'open'[39m,
+      inviteProtocol: [32m'game'[39m,
+      postedTime: [32m'2026-08-11T16:14:13.1710127Z'[39m
+    },
+    customProperties: [Object: null prototype] {
+      BroadcastSetting: [33m3[39m,
+      CrossPlayDisabled: [33mfalse[39m,
+      Joinability: [32m'joinable_by_friends'[39m,
+      LanGame: [33mfalse[39m,
+      MaxMemberCount: [33m2025[39m,
+      MemberCount: [33m1[39m,
+      OnlineCrossPlatformGame: [33mtrue[39m,
+      SupportedConnections: [
+        [Object: null prototype] {
+          ConnectionType: [33m7[39m,
+          HostIpAddress: [32m''[39m,
+          HostPort: [33m0[39m,
+          NetherNetId: BigNumber { s: [33m1[39m, e: [33m18[39m, c: [ [33m60723[39m, [33m31925241204194[39m ] },
+          PmsgId: [32m'952a778d-3ca2-955c-721e-af0cd00febac'[39m
+        }
+      ],
+      TitleId: [33m0[39m,
+      TransportLayer: [33m2[39m,
+      levelId: [32m'level'[39m,
+      hostName: [32m'▶ Play Now!  —  0/2025 players online'[39m,
+      ownerId: [32m'2535432879049807'[39m,
+      rakNetGUID: [32m''[39m,
+      worldName: [32m'✦ PEXserver ✦  |  MiniGame / PVP ⚔'[39m,
+      worldType: [32m'Survival'[39m,
+      protocol: [33m2168[39m,
+      version: [32m'1.26.40'[39m,
+      isEditorWorld: [33mfalse[39m,
+      isHardcore: [33mfalse[39m,
+      nonces: [Object: null prototype] {}
+    },
+    membersInfo: [Object: null prototype] {
+      first: [33m0[39m,
+      next: [33m1[39m,
+      count: [33m1[39m,
+      accepted: [33m1[39m,
+      active: [33m1[39m
+    },
+    constants: [Object: null prototype] {
+      system: [Object: null prototype] {
+        readyRemovalTimeout: [33m240000[39m,
+        reservedRemovalTimeout: [33m240000[39m,
+        sessionEmptyTimeout: [33m0[39m,
+        inactiveRemovalTimeout: [33m300000[39m,
+        version: [33m1[39m,
+        maxMembersCount: [33m30[39m,
+        visibility: [32m'open'[39m,
+        capabilities: [Object: null prototype] {
+          connectivity: [33mtrue[39m,
+          connectionRequiredForActiveMembers: [33mtrue[39m,
+          gameplay: [33mtrue[39m,
+          crossPlay: [33mtrue[39m,
+          userAuthorizationStyle: [33mtrue[39m
+        },
+        inviteProtocol: [32m'game'[39m,
+        memberInitialization: [Object: null prototype] { membersNeededToStart: [33m1[39m }
+      },
+      custom: [Object: null prototype] {}
+    },
+    properties: [Object: null prototype] {
+      system: [Object: null prototype] {
+        joinRestriction: [32m'followed'[39m,
+        readRestriction: [32m'followed'[39m,
+        turn: []
+      },
+      custom: [Object: null prototype] {
+        BroadcastSetting: [33m3[39m,
+        CrossPlayDisabled: [33mfalse[39m,
+        Joinability: [32m'joinable_by_friends'[39m,
+        LanGame: [33mfalse[39m,
+        MaxMemberCount: [33m2025[39m,
+        MemberCount: [33m1[39m,
+        OnlineCrossPlatformGame: [33mtrue[39m,
+        SupportedConnections: [
+          [Object: null prototype] {
+            ConnectionType: [33m7[39m,
+            HostIpAddress: [32m''[39m,
+            HostPort: [33m0[39m,
+            NetherNetId: BigNumber { s: [33m1[39m, e: [33m18[39m, c: [ [33m60723[39m, [33m31925241204194[39m ] },
+            PmsgId: [32m'952a778d-3ca2-955c-721e-af0cd00febac'[39m
+          }
+        ],
+        TitleId: [33m0[39m,
+        TransportLayer: [33m2[39m,
+        levelId: [32m'level'[39m,
+        hostName: [32m'▶ Play Now!  —  0/2025 players online'[39m,
+        ownerId: [32m'2535432879049807'[39m,
+        rakNetGUID: [32m''[39m,
+        worldName: [32m'✦ PEXserver ✦  |  MiniGame / PVP ⚔'[39m,
+        worldType: [32m'Survival'[39m,
+        protocol: [33m2168[39m,
+        version: [32m'1.26.40'[39m,
+        isEditorWorld: [33mfalse[39m,
+        isHardcore: [33mfalse[39m,
+        nonces: [Object: null prototype] {}
+      }
+    },
+    servers: [Object: null prototype] {},
+    members: [Object: null prototype] {
+      [32m'0'[39m: [Object: null prototype] {
+        next: [33m1[39m,
+        joinTime: [32m'2026-08-11T16:14:13.1710127Z'[39m,
+        constants: [Object: null prototype] {
+          system: [Object: null prototype] {
+            initialize: [33mtrue[39m,
+            xuid: [32m'2535432879049807'[39m,
+            index: [33m0[39m
+          },
+          custom: [Object: null prototype] {}
+        },
+        properties: [Object: null prototype] {
+          system: [Object: null prototype] {
+            subscription: [Object: null prototype] {
+              id: [32m'91822faf-40a5-4ae7-b2f7-2806b78a0c36'[39m,
+              changeTypes: [ [32m'everything'[39m ]
+            },
+            active: [33mtrue[39m,
+            connection: [32m'50d8ca51-af97-4614-b225-c0bf160fc3bb'[39m
+          },
+          custom: [Object: null prototype] {}
+        },
+        gamertag: [32m'PEXserver'[39m,
+        activeTitleId: [32m'1739947436'[39m
+      }
+    },
+    correlationId: [32m'8ef64ac5-b475-2bed-e386-bbea7ee94d78'[39m,
+    contractVersion: [33m107[39m,
+    branch: [32m'b48164aa-6b22-44a5-ab11-14b4ec99da65'[39m,
+    changeNumber: [33m377[39m,
+    startTime: [32m'2026-08-11T16:14:13.1710127Z'[39m
+  }
+]
+
+参加可能なXboxセッション:
+1. PEXkurann / (｣º дº)｣ﾃｽｩｩｩｩｩｩｩﾝｯ!!!!! (1.26.40) 1/5
+2. ▶ Play Now!  —  0/2025 players online / ✦ PEXserver ✦  |  MiniGame / PVP ⚔ (1.26.40) 1/2025
+非対話モードで接続する番号を選択しました: 1
+
+[DEBUG] Session Directory API customProperties.nonces の内容
+{ keys: [ [32m'2535428963647242'[39m ], valueCount: [33m1[39m }
+
+[DEBUG] Session Directory API properties.custom.nonces の内容
+{ keys: [ [32m'2535428963647242'[39m ], valueCount: [33m1[39m }
+[BedrockX:session] Session Directory APIからnonceを取得しました { length: 16, value: '36cbf83c01b78280' }
+[BedrockX:session] Type 7接続情報を選択 {
+  NetherNetId: '7134705339844319103',
+  PmsgId: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  version: '1.26.40',
+  protocolVersion: 2168
+}
+[BedrockX:signal] connect start {
+  localNetherNetId: '9516328313770331607',
+  destinationPmsgId: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  version: '1.26.40'
+}
+[BedrockX:signal] requesting Minecraft services token
+[BedrockX:signal] Minecraft services token acquired
+[BedrockX:signal] opening franchise messaging websocket
+[BedrockX:signal] websocket open; requesting TURN credentials
+[BedrockX:signal] TURN credentials received { iceServerCount: 3 }
+[BedrockX:rtc] creating peer connection {
+  remoteNetherNetId: '7134705339844319103',
+  localNetherNetId: '9516328313770331607',
+  connectionId: '7249573610255486984',
+  iceServerCount: 3
+}
+NetherNet 接続を開始しました。
+[BedrockX:rtc] WebRTC offer created
+[BedrockX:rtc] identity assertion added to SDP
+[BedrockX:rtc] local description set; sending CONNECTREQUEST
+[BedrockX:signal] sending signal {
+  type: 'CONNECTREQUEST',
+  destinationPmsgId: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  localNetherNetId: '9516328313770331607',
+  connectionId: '7249573610255486984'
+}
+[BedrockX:rtc] local ICE candidate generated
+[BedrockX:signal] local ICE candidate queued { queuedCandidates: 1 }
+[BedrockX:rtc] local ICE candidate generated
+[BedrockX:signal] local ICE candidate queued { queuedCandidates: 2 }
+[BedrockX:rtc] local ICE candidate generated
+[BedrockX:signal] local ICE candidate queued { queuedCandidates: 3 }
+[BedrockX:rtc] local ICE candidate generated
+[BedrockX:signal] local ICE candidate queued { queuedCandidates: 4 }
+[BedrockX:rtc] local ICE candidate generated
+[BedrockX:signal] local ICE candidate queued { queuedCandidates: 5 }
+[BedrockX:rtc] local ICE candidate generated
+[BedrockX:signal] local ICE candidate queued { queuedCandidates: 6 }
+[BedrockX:rtc] local ICE candidate filtered
+[BedrockX:rtc] local ICE candidate filtered
+[BedrockX:rtc] local ICE candidate generated
+[BedrockX:signal] local ICE candidate queued { queuedCandidates: 7 }
+[BedrockX:rtc] local ICE candidate generated
+[BedrockX:signal] local ICE candidate queued { queuedCandidates: 8 }
+[BedrockX:rtc] local ICE candidate filtered
+[BedrockX:rtc] local ICE candidate filtered
+[BedrockX:rtc] local ICE candidate filtered
+[BedrockX:rtc] local ICE candidate filtered
+[BedrockX:rtc] local ICE candidate filtered
+[BedrockX:rtc] local ICE candidate filtered
+[BedrockX:rtc] local ICE candidate filtered
+[BedrockX:rtc] local ICE candidate filtered
+[BedrockX:rtc] local ICE candidate generated
+[BedrockX:signal] local ICE candidate queued { queuedCandidates: 9 }
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:rtc] local ICE candidate generated
+[BedrockX:signal] local ICE candidate queued { queuedCandidates: 10 }
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] parsed remote signal {
+  type: 'CONNECTRESPONSE',
+  from: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  connectionId: '7249573610255486984',
+  expectedConnectionId: '7249573610255486984',
+  isCurrentConnection: true,
+  data: undefined
+}
+[BedrockX:signal] sending signal {
+  type: 'CANDIDATEADD',
+  destinationPmsgId: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  localNetherNetId: '9516328313770331607',
+  connectionId: '7249573610255486984'
+}
+[BedrockX:signal] sending signal {
+  type: 'CANDIDATEADD',
+  destinationPmsgId: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  localNetherNetId: '9516328313770331607',
+  connectionId: '7249573610255486984'
+}
+[BedrockX:signal] sending signal {
+  type: 'CANDIDATEADD',
+  destinationPmsgId: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  localNetherNetId: '9516328313770331607',
+  connectionId: '7249573610255486984'
+}
+[BedrockX:signal] sending signal {
+  type: 'CANDIDATEADD',
+  destinationPmsgId: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  localNetherNetId: '9516328313770331607',
+  connectionId: '7249573610255486984'
+}
+[BedrockX:signal] sending signal {
+  type: 'CANDIDATEADD',
+  destinationPmsgId: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  localNetherNetId: '9516328313770331607',
+  connectionId: '7249573610255486984'
+}
+[BedrockX:signal] sending signal {
+  type: 'CANDIDATEADD',
+  destinationPmsgId: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  localNetherNetId: '9516328313770331607',
+  connectionId: '7249573610255486984'
+}
+[BedrockX:signal] sending signal {
+  type: 'CANDIDATEADD',
+  destinationPmsgId: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  localNetherNetId: '9516328313770331607',
+  connectionId: '7249573610255486984'
+}
+[BedrockX:signal] sending signal {
+  type: 'CANDIDATEADD',
+  destinationPmsgId: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  localNetherNetId: '9516328313770331607',
+  connectionId: '7249573610255486984'
+}
+[BedrockX:signal] sending signal {
+  type: 'CANDIDATEADD',
+  destinationPmsgId: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  localNetherNetId: '9516328313770331607',
+  connectionId: '7249573610255486984'
+}
+[BedrockX:signal] sending signal {
+  type: 'CANDIDATEADD',
+  destinationPmsgId: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  localNetherNetId: '9516328313770331607',
+  connectionId: '7249573610255486984'
+}
+[BedrockX:rtc] applying CONNECTRESPONSE { connectionId: '7249573610255486984', sdpLength: 1681 }
+[BedrockX:rtc] connection state new
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] parsed remote signal {
+  type: 'CANDIDATEADD',
+  from: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  connectionId: '7249573610255486984',
+  expectedConnectionId: '7249573610255486984',
+  isCurrentConnection: true,
+  data: undefined
+}
+[BedrockX:rtc] applying remote ICE candidate { protocol: 'udp', type: 'host', address: '192.0.0.2', port: 55011 }
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] parsed remote signal {
+  type: 'CANDIDATEADD',
+  from: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  connectionId: '7249573610255486984',
+  expectedConnectionId: '7249573610255486984',
+  isCurrentConnection: true,
+  data: undefined
+}
+[BedrockX:rtc] applying remote ICE candidate { protocol: 'udp', type: 'host', address: '172.20.10.1', port: 49327 }
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] parsed remote signal {
+  type: 'CANDIDATEADD',
+  from: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  connectionId: '7249573610255486984',
+  expectedConnectionId: '7249573610255486984',
+  isCurrentConnection: true,
+  data: undefined
+}
+[BedrockX:rtc] applying remote ICE candidate { protocol: 'udp', type: 'host', address: '100.83.73.17', port: 59372 }
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] parsed remote signal {
+  type: 'CANDIDATEADD',
+  from: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  connectionId: '7249573610255486984',
+  expectedConnectionId: '7249573610255486984',
+  isCurrentConnection: true,
+  data: undefined
+}
+[BedrockX:rtc] applying remote ICE candidate {
+  protocol: 'udp',
+  type: 'host',
+  address: '240a:61:1240:45db:806a:d0ee:f31c:5f45',
+  port: 52933
+}
+[BedrockX:rtc] ICE gathering complete
+[BedrockX:rtc] connection state connected
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] parsed remote signal {
+  type: 'CANDIDATEADD',
+  from: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  connectionId: '7249573610255486984',
+  expectedConnectionId: '7249573610255486984',
+  isCurrentConnection: true,
+  data: undefined
+}
+[BedrockX:rtc] applying remote ICE candidate {
+  protocol: 'udp',
+  type: 'host',
+  address: 'fd7a:115c:a1e0::e03b:4912',
+  port: 54408
+}
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] parsed remote signal {
+  type: 'CANDIDATEADD',
+  from: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  connectionId: '7249573610255486984',
+  expectedConnectionId: '7249573610255486984',
+  isCurrentConnection: true,
+  data: undefined
+}
+[BedrockX:rtc] applying remote ICE candidate {
+  protocol: 'udp',
+  type: 'host',
+  address: '240a:61:1240:45db:1e6:d6af:103a:84af',
+  port: 54919
+}
+Bedrock network_settingsを受信しました。
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] parsed remote signal {
+  type: 'CANDIDATEADD',
+  from: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  connectionId: '7249573610255486984',
+  expectedConnectionId: '7249573610255486984',
+  isCurrentConnection: true,
+  data: undefined
+}
+[BedrockX:rtc] applying remote ICE candidate {
+  protocol: 'udp',
+  type: 'host',
+  address: '240a:7:48a4:27c:1c48:d8be:b49f:b4fb',
+  port: 60244
+}
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] parsed remote signal {
+  type: 'CANDIDATEADD',
+  from: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  connectionId: '7249573610255486984',
+  expectedConnectionId: '7249573610255486984',
+  isCurrentConnection: true,
+  data: undefined
+}
+[BedrockX:rtc] applying remote ICE candidate {
+  protocol: 'udp',
+  type: 'host',
+  address: '240a:7:48a4:27c:31b7:3ce0:63d8:e7b8',
+  port: 58692
+}
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] parsed remote signal {
+  type: 'CANDIDATEADD',
+  from: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  connectionId: '7249573610255486984',
+  expectedConnectionId: '7249573610255486984',
+  isCurrentConnection: true,
+  data: undefined
+}
+[BedrockX:rtc] applying remote ICE candidate {
+  protocol: 'udp',
+  type: 'srflx',
+  address: '49.105.94.178',
+  port: 55011
+}
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] parsed remote signal {
+  type: 'CANDIDATEADD',
+  from: '8e596513-a7bd-78bc-3ea6-557f09541f4b',
+  connectionId: '7249573610255486984',
+  expectedConnectionId: '7249573610255486984',
+  isCurrentConnection: true,
+  data: undefined
+}
+[BedrockX:rtc] applying remote ICE candidate {
+  protocol: 'udp',
+  type: 'relay',
+  address: '20.202.45.241',
+  port: 54421
+}
+Bedrock play_status: login_success
+ワールドへ参加しました。
+Bedrock resource_packs_infoを受信しました。
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] signaling message received { itemCount: 1 }
+プレイヤーリスト: {
+  records: [
+    {
+      type: 'add',
+      legacy_type: 0,
+      uuid: '6e3e4a34-0846-401b-4e3e-1d13512d0a8c',
+      entity_unique_id: -107374182399n,
+      username: 'funk8811',
+      xbox_user_id: '2535428963647242',
+      platform_chat_id: ''
+    }
+  ]
+}
+Bedrockワールドの開始情報を受信しました。
+プレイヤーリスト: {
+  records: [
+    {
+      type: 'add',
+      legacy_type: 0,
+      uuid: '6e3e4a34-0846-401b-4e3e-1d13512d0a8c',
+      entity_unique_id: -107374182399n,
+      username: 'funk8811',
+      xbox_user_id: '2535428963647242',
+      platform_chat_id: ''
+    },
+    { type: 2, legacy_type: 0 }
+  ]
+}
+利用可能コマンド一覧を受信しました。
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] signaling message received { itemCount: 1 }
+[BedrockX:signal] signaling message received { itemCount: 1 }
+Bedrock play_status: player_spawn
+プレイヤー初期化パケットを送信しました。
+プレイヤーがスポーンしました。
+チャット「hello World from Bedrock Protocol Client Bot!!」を送信しました。
+テキスト受信: {
+  needs_translation: false,
+  category: 'authored',
+  type: 'chat',
+  source_name: 'funk8811§r',
+  message: 'hello World from Bedrock Protocol Client Bot!!',
+  xuid: '2535428963647242',
+  platform_chat_id: '',
+  has_filtered_message: false,
+  filtered_message: undefined
+}
+コマンド「/help」を送信しました。
+[BedrockX:rtc] connection state connected
+コマンド結果受信待機後に接続を終了します。
+クライアントを終了しました: Greeting sent
+[BedrockX:rtc] connection state closed
+
+AUTOKICK_INTEGRATION_RESULT={"success":false,"sessionIndex":"1","events":["join","spawn"],"code":3221226505,"signal":null}

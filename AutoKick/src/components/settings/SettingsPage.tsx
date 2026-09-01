@@ -1,0 +1,5 @@
+import type { AccountAutomationMap, AccountProfile, AutomationOptions } from "../../client/types";
+import { AccountAutomationSettings } from "../automation/AccountAutomationSettings";
+
+interface Props { accounts: AccountProfile[]; values: AccountAutomationMap; onChange: (id: string, value: AutomationOptions) => void; onReset: (id: string) => void; plugins?: Array<{ id: string; name: string; version?: string; actions: string[] }>; }
+export function SettingsPage({ accounts, values, onChange, onReset, plugins }: Props) { return <section className="settings-page"><div className="section-heading"><div><p className="eyebrow">SETTINGS / AUTOMATION</p><h2>アクション設定</h2><p>アカウントごとのチャット、コマンド、実行回数を設定します。</p></div></div><AccountAutomationSettings accounts={accounts} values={values} onChange={onChange} plugins={plugins} onReset={onReset} /></section>; }
